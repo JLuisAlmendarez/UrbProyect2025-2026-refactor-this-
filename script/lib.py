@@ -1,16 +1,63 @@
-
+"""
+    @staticmethod
+    def get_transect_groups(df, question_col):
+        transect_groups = {
+            t: pd.to_numeric(df[df["Transecto"] == t][question_col], errors="coerce").dropna()
+            for t in sorted(df["Transecto"].unique())
+        }
+        group_names = [f"Transecto {t}" for t in transect_groups.keys()]
+        groups = list(transect_groups.values())
+        return transect_groups, group_names, groups
+"""
 from scipy.stats import normaltest
 import numpy as np
-import matplotlib.pyplot as plt
+import pandas as pd
+import streamlit as st
 import plotly.express as px
 from scipy.stats import boxcox
 from scipy.stats import levene
 from scipy.stats import mannwhitneyu
 from scipy.stats import ttest_ind
+import matplotlib.pyplot as plt
+from scipy.stats import norm, t, chi2
+
+class CorrSystem:
+    @staticmethod
+    def do(df):
+        # Solo variables numéricas
+        df_num = df.select_dtypes(include=["int64", "float64"])
+
+        # Selector de columnas en Streamlit
+        selected = st.multiselect(
+            "Selecciona columnas numéricas",
+            options=df_num.columns.tolist(),
+            default=df_num.columns.tolist()[:2]  # Preselecciona las primeras 2
+        )
+
+        # Mostrar correlación
+        if len(selected) < 2:
+            st.warning("⚠️ Selecciona al menos 2 columnas.")
+        else:
+            corr = df_num[selected].corr()
+            fig = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale="Plasma")
+            fig.update_xaxes(showticklabels=False)
+            fig.update_yaxes(showticklabels=False)
+            st.plotly_chart(fig, use_container_width=True)
+
 
 class StatHypothesisTest:
     @staticmethod
-    def analize_distribution_normality(group1, group2, alpha=0.05):
+    def get_transect_groups(df, question_col):
+        transect_groups = {
+            t: pd.to_numeric(df[df["Transecto"] == t][question_col], errors="coerce").dropna()
+            for t in sorted(df["Transecto"].unique())
+        }
+        group_names = [f"Transecto {t}" for t in transect_groups.keys()]
+        groups = list(transect_groups.values())
+        return transect_groups, group_names, groups
+
+    @staticmethod
+    def analize_distribution_normality(group1, group2, alpha=0.05, plot=True):
         print("Normality test search")
         print("=" * 55)
 
@@ -27,6 +74,14 @@ class StatHypothesisTest:
 
         if normal1_orig and normal2_orig:
             print("Both groups fulfill normality - Default values 😄")
+            if plot:
+                # Show plots for all transformations attempted
+                StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
+                # Show summary
+                all_results = {
+                    'Original': (p1_orig, p2_orig, True)
+                }
+                StatHypothesisTest._plot_normality_summary(all_results, alpha)
             return group1, group2, "original", {"p1": p1_orig, "p2": p2_orig}, True
 
         # Logarithmic transformation Data Analysis
@@ -54,6 +109,15 @@ class StatHypothesisTest:
 
             if normal1_log and normal2_log:
                 print("Both groups fulfill normality - Logarithmic values 😄")
+                if plot:
+                    # Show plots for all transformations attempted so far
+                    StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
+                    # Show summary
+                    all_results = {
+                        'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
+                        'Log': (p1_log, p2_log, True)
+                    }
+                    StatHypothesisTest._plot_normality_summary(all_results, alpha)
                 return g1_log, g2_log, "log", {"p1": p1_log, "p2": p2_log, "shift": shift}, True
 
         except Exception as e:
@@ -86,6 +150,17 @@ class StatHypothesisTest:
 
             if normal1_sqrt and normal2_sqrt:
                 print("Both groups fulfill normality - Square root values 😄")
+                if plot:
+                    # Show plots for all transformations attempted so far
+                    StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
+                    # Show summary
+                    all_results = {
+                        'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
+                        'Log': (p1_log if not np.isnan(p1_log) else 0, p2_log if not np.isnan(p2_log) else 0,
+                                not np.isnan(p1_log) and not np.isnan(p2_log) and p1_log > alpha and p2_log > alpha),
+                        'Sqrt': (p1_sqrt, p2_sqrt, True)
+                    }
+                    StatHypothesisTest._plot_normality_summary(all_results, alpha)
                 return g1_sqrt, g2_sqrt, "sqrt", {"p1": p1_sqrt, "p2": p2_sqrt, "shift": shift}, True
 
         except Exception as e:
@@ -124,6 +199,20 @@ class StatHypothesisTest:
 
             if normal1_boxcox and normal2_boxcox:
                 print("Both groups fulfill normality - Box-Cox values 😄")
+                if plot:
+                    # Show plots for all transformations attempted so far
+                    StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
+                    # Show summary
+                    all_results = {
+                        'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
+                        'Log': (p1_log if not np.isnan(p1_log) else 0, p2_log if not np.isnan(p2_log) else 0,
+                                not np.isnan(p1_log) and not np.isnan(p2_log) and p1_log > alpha and p2_log > alpha),
+                        'Sqrt': (p1_sqrt if not np.isnan(p1_sqrt) else 0, p2_sqrt if not np.isnan(p2_sqrt) else 0,
+                                 not np.isnan(p1_sqrt) and not np.isnan(
+                                     p2_sqrt) and p1_sqrt > alpha and p2_sqrt > alpha),
+                        'Box-Cox': (p1_boxcox, p2_boxcox, True)
+                    }
+                    StatHypothesisTest._plot_normality_summary(all_results, alpha)
                 return g1_boxcox, g2_boxcox, "boxcox", {
                     "p1": p1_boxcox, "p2": p2_boxcox,
                     "lambda1": lambda1, "lambda2": lambda2, "shift": shift
@@ -137,15 +226,35 @@ class StatHypothesisTest:
         print(f"\nNo transformation is valid for normality test ❌")
         print(f"Summary:")
         print(f"   Original: G1={'✅' if normal1_orig else '❌'} G2={'✅' if normal2_orig else '❌'}")
-        print(f"   Log:      G1={'✅' if not np.isnan(p1_log) and p1_log > alpha else '❌'} G2={'✅' if not np.isnan(p2_log) and p2_log > alpha else '❌'}")
-        print(f"   Sqrt:     G1={'✅' if not np.isnan(p1_sqrt) and p1_sqrt > alpha else '❌'} G2={'✅' if not np.isnan(p2_sqrt) and p2_sqrt > alpha else '❌'}")
-        print(f"   Box-Cox:  G1={'✅' if not np.isnan(p1_boxcox) and p1_boxcox > alpha else '❌'} G2={'✅' if not np.isnan(p2_boxcox) and p2_boxcox > alpha else '❌'}")
+        print(
+            f"   Log:      G1={'✅' if not np.isnan(p1_log) and p1_log > alpha else '❌'} G2={'✅' if not np.isnan(p2_log) and p2_log > alpha else '❌'}")
+        print(
+            f"   Sqrt:     G1={'✅' if not np.isnan(p1_sqrt) and p1_sqrt > alpha else '❌'} G2={'✅' if not np.isnan(p2_sqrt) and p2_sqrt > alpha else '❌'}")
+        print(
+            f"   Box-Cox:  G1={'✅' if not np.isnan(p1_boxcox) and p1_boxcox > alpha else '❌'} G2={'✅' if not np.isnan(p2_boxcox) and p2_boxcox > alpha else '❌'}")
         print(f"\n➡️  Use original data with Mann-Whitney U")
+
+        # Show summary of all transformations tried
+        if plot:
+            # Show plots for all transformations attempted
+            StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
+            # Show final summary
+            all_results = {
+                'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
+                'Log': (p1_log if not np.isnan(p1_log) else 0, p2_log if not np.isnan(p2_log) else 0,
+                        not np.isnan(p1_log) and not np.isnan(p2_log) and p1_log > alpha and p2_log > alpha),
+                'Sqrt': (p1_sqrt if not np.isnan(p1_sqrt) else 0, p2_sqrt if not np.isnan(p2_sqrt) else 0,
+                         not np.isnan(p1_sqrt) and not np.isnan(p2_sqrt) and p1_sqrt > alpha and p2_sqrt > alpha),
+                'Box-Cox': (p1_boxcox if not np.isnan(p1_boxcox) else 0, p2_boxcox if not np.isnan(p2_boxcox) else 0,
+                            not np.isnan(p1_boxcox) and not np.isnan(
+                                p2_boxcox) and p1_boxcox > alpha and p2_boxcox > alpha)
+            }
+            StatHypothesisTest._plot_normality_summary(all_results, alpha)
 
         return group1, group2, "original", {"p1": p1_orig, "p2": p2_orig}, False
 
     @staticmethod
-    def analize_distributions_homogeneity(group1, group2, alpha=0.05):
+    def analize_distributions_homogeneity(group1, group2, alpha=0.05, plot=True):
         print("Homogeneity between variances verification")
         print("=" * 55)
 
@@ -158,11 +267,47 @@ class StatHypothesisTest:
         print(f"   p-value: {p_levene:.6f} 📈")
         print(f"   Result: {'✅ Homogeneous variances' if homogeneous else '❌ Heterogeneous variances'}")
 
+        # Plot variance comparison
+        if plot:
+            StatHypothesisTest._plot_variance_homogeneity(group1, group2, stat_levene, p_levene, homogeneous)
+
         return stat_levene, p_levene, homogeneous
 
     @staticmethod
+    def _plot_variance_homogeneity(group1, group2, stat_levene, p_levene, homogeneous):
+        """Boxplot comparison for variance homogeneity"""
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Create boxplots
+        bp = plt.boxplot([group1, group2], labels=['Group 1', 'Group 2'], patch_artist=True)
+        bp['boxes'][0].set_facecolor('lightblue')
+        bp['boxes'][1].set_facecolor('lightcoral')
+        bp['boxes'][0].set_alpha(0.7)
+        bp['boxes'][1].set_alpha(0.7)
+
+        # Add variance annotations
+        var1, var2 = np.var(group1, ddof=1), np.var(group2, ddof=1)
+        max1, max2 = np.max(group1), np.max(group2)
+
+        plt.text(1, max1 + (max1 - np.min(group1)) * 0.05, f'Var: {var1:.3f}',
+                 ha='center', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+        plt.text(2, max2 + (max2 - np.min(group2)) * 0.05, f'Var: {var2:.3f}',
+                 ha='center', bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.8))
+
+        # Levene test result
+        result_text = f"Levene's Test\nStatistic: {stat_levene:.4f}\np-value: {p_levene:.6f}\n{'✅ Homogeneous' if homogeneous else '❌ Heterogeneous'}"
+        plt.text(1.5, plt.ylim()[1] * 0.9, result_text, ha='center', va='top',
+                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black'))
+
+        plt.title('Variance Homogeneity Test', fontsize=14, fontweight='bold')
+        plt.ylabel('Values')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        st.pyplot(fig)
+
+    @staticmethod
     def execute_statistical_test(group1, group2, normalidad_positiva, homogeneidad_positiva, transformacion, params,
-                                 alpha=0.05):
+                                 alpha=0.05, plot=True):
 
         def inverse_transform(data, transform_type, params, group_num=1):
             if transform_type == "original":
@@ -235,6 +380,11 @@ class StatHypothesisTest:
         # Execute statistical test
         stat, p_val = statistical_difference_significance(group1, group2, normalidad_positiva, homogeneidad_positiva)
 
+        # Plot p-value distribution
+        if plot:
+            test_type = StatHypothesisTest._determine_test_type(normalidad_positiva, homogeneidad_positiva)
+            StatHypothesisTest._plot_pvalue_distribution(stat, p_val, test_type, alpha, len(group1), len(group2))
+
         # Return to original scale
         if transformacion != "original":
             print(f"\n🔄 Reverting '{transformacion}' transformation to calculate metrics in original scale...")
@@ -296,6 +446,11 @@ class StatHypothesisTest:
         hl, hl_ci = measure_difference(group1_original, group2_original)
         cohens_d, r_rosenthal = measure_effect(group1_original, group2_original, stat)
 
+        # Plot effect sizes and Hodges-Lehmann
+        if plot:
+            StatHypothesisTest._plot_effect_sizes(group1_original, group2_original, cohens_d, r_rosenthal)
+            StatHypothesisTest._plot_hodges_lehmann_bootstrap(group1_original, group2_original, hl, hl_ci)
+
         # Return results
         return {
             'stat': stat,
@@ -306,9 +461,398 @@ class StatHypothesisTest:
             'rosenthal_r': r_rosenthal
         }
 
+    @staticmethod
+    def _determine_test_type(normalidad_positiva, homogeneidad_positiva):
+        """Determine which test was used"""
+        if normalidad_positiva == 0:
+            return "Mann-Whitney U"
+        elif normalidad_positiva == 1 and homogeneidad_positiva == 1:
+            return "Independent t-test"
+        elif normalidad_positiva == 1 and homogeneidad_positiva == 0:
+            return "Welch's t-test"
+
+    @staticmethod
+    def _plot_pvalue_distribution(stat, p_val, test_type, alpha, n1, n2):
+        """Bell curve with p-value for each test"""
+        plt.figure(figsize=(12, 6))
+
+        if test_type == "Mann-Whitney U":
+            # Para Mann-Whitney, usar distribución normal aproximada
+            x = np.linspace(-4, 4, 1000)
+            y = norm.pdf(x, 0, 1)
+
+            # Convertir U a z-score aproximado
+            mean_u = n1 * n2 / 2
+            std_u = np.sqrt(n1 * n2 * (n1 + n2 + 1) / 12)
+            z_score = (stat - mean_u) / std_u
+
+            plt.plot(x, y, 'b-', linewidth=2, label='Standard Normal')
+            plt.axvline(z_score, color='red', linewidth=3, label=f'Observed z: {z_score:.3f}')
+
+            # Critical regions
+            z_crit = norm.ppf(1 - alpha / 2)
+            plt.axvline(-z_crit, color='red', linestyle='--', alpha=0.7)
+            plt.axvline(z_crit, color='red', linestyle='--', alpha=0.7)
+
+            # Shade rejection regions
+            x_left = x[x <= -z_crit]
+            x_right = x[x >= z_crit]
+            plt.fill_between(x_left, norm.pdf(x_left, 0, 1), alpha=0.3, color='red')
+            plt.fill_between(x_right, norm.pdf(x_right, 0, 1), alpha=0.3, color='red')
+
+        else:  # t-tests
+            df = n1 + n2 - 2
+            x = np.linspace(-4, 4, 1000)
+            y = t.pdf(x, df)
+
+            plt.plot(x, y, 'b-', linewidth=2, label=f't-distribution (df={df})')
+            plt.axvline(stat, color='red', linewidth=3, label=f'Observed t: {stat:.3f}')
+
+            # Critical regions
+            t_crit = t.ppf(1 - alpha / 2, df)
+            plt.axvline(-t_crit, color='red', linestyle='--', alpha=0.7)
+            plt.axvline(t_crit, color='red', linestyle='--', alpha=0.7)
+
+            # Shade rejection regions
+            x_left = x[x <= -t_crit]
+            x_right = x[x >= t_crit]
+            plt.fill_between(x_left, t.pdf(x_left, df), alpha=0.3, color='red')
+            plt.fill_between(x_right, t.pdf(x_right, df), alpha=0.3, color='red')
+
+        plt.title(f'{test_type}\np-value = {p_val:.5f}', fontsize=14, fontweight='bold')
+        plt.xlabel('Test Statistic')
+        plt.ylabel('Density')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        st.pyplot(plt)
+
+    @staticmethod
+    def _plot_all_normality_tests(group1, group2, alpha):
+        """Plot detailed normality tests for all transformations attempted"""
+
+        # Prepare all transformations
+        transformations = {}
+
+        # Original data
+        stat1_orig, p1_orig = normaltest(group1)
+        stat2_orig, p2_orig = normaltest(group2)
+        transformations['Original'] = {
+            'data1': group1, 'data2': group2,
+            'stat1': stat1_orig, 'stat2': stat2_orig,
+            'p1': p1_orig, 'p2': p2_orig
+        }
+
+        # Log transformation
+        try:
+            min_val = min(np.min(group1), np.min(group2))
+            if min_val <= 0:
+                shift = abs(min_val) + 1
+                g1_log = np.log(group1 + shift)
+                g2_log = np.log(group2 + shift)
+            else:
+                g1_log = np.log(group1)
+                g2_log = np.log(group2)
+
+            stat1_log, p1_log = normaltest(g1_log)
+            stat2_log, p2_log = normaltest(g2_log)
+            transformations['Log'] = {
+                'data1': g1_log, 'data2': g2_log,
+                'stat1': stat1_log, 'stat2': stat2_log,
+                'p1': p1_log, 'p2': p2_log
+            }
+        except:
+            transformations['Log'] = None
+
+        # Sqrt transformation
+        try:
+            min_val = min(np.min(group1), np.min(group2))
+            if min_val < 0:
+                shift = abs(min_val)
+                g1_sqrt = np.sqrt(group1 + shift)
+                g2_sqrt = np.sqrt(group2 + shift)
+            else:
+                g1_sqrt = np.sqrt(group1)
+                g2_sqrt = np.sqrt(group2)
+
+            stat1_sqrt, p1_sqrt = normaltest(g1_sqrt)
+            stat2_sqrt, p2_sqrt = normaltest(g2_sqrt)
+            transformations['Sqrt'] = {
+                'data1': g1_sqrt, 'data2': g2_sqrt,
+                'stat1': stat1_sqrt, 'stat2': stat2_sqrt,
+                'p1': p1_sqrt, 'p2': p2_sqrt
+            }
+        except:
+            transformations['Sqrt'] = None
+
+        # Box-Cox transformation
+        try:
+            min_val = min(np.min(group1), np.min(group2))
+            if min_val <= 0:
+                shift = abs(min_val) + 0.1
+                g1_shifted = group1 + shift
+                g2_shifted = group2 + shift
+            else:
+                g1_shifted = group1
+                g2_shifted = group2
+
+            g1_boxcox, _ = boxcox(g1_shifted)
+            g2_boxcox, _ = boxcox(g2_shifted)
+
+            stat1_boxcox, p1_boxcox = normaltest(g1_boxcox)
+            stat2_boxcox, p2_boxcox = normaltest(g2_boxcox)
+            transformations['Box-Cox'] = {
+                'data1': g1_boxcox, 'data2': g2_boxcox,
+                'stat1': stat1_boxcox, 'stat2': stat2_boxcox,
+                'p1': p1_boxcox, 'p2': p2_boxcox
+            }
+        except:
+            transformations['Box-Cox'] = None
+
+        # Create plots for each transformation
+        valid_transforms = {k: v for k, v in transformations.items() if v is not None}
+        n_transforms = len(valid_transforms)
+
+        fig, axes = plt.subplots(n_transforms, 2, figsize=(15, 5 * n_transforms))
+        if n_transforms == 1:
+            axes = axes.reshape(1, -1)
+
+        # Chi-square distribution
+        x = np.linspace(0, 15, 1000)
+        y = chi2.pdf(x, df=2)
+        chi2_crit = chi2.ppf(1 - alpha, df=2)
+        x_reject = x[x >= chi2_crit]
+
+        for i, (name, data) in enumerate(valid_transforms.items()):
+            # Group 1 plot
+            axes[i, 0].plot(x, y, 'b-', linewidth=2, label='Chi-square (df=2)')
+            axes[i, 0].axvline(data['stat1'], color='red', linewidth=3, label=f'Observed: {data["stat1"]:.3f}')
+            axes[i, 0].axvline(chi2_crit, color='red', linestyle='--', alpha=0.7, label=f'Critical: {chi2_crit:.3f}')
+            axes[i, 0].fill_between(x_reject, chi2.pdf(x_reject, df=2), alpha=0.3, color='red')
+
+            result1 = "✅ Normal" if data['p1'] > alpha else "❌ Non-normal"
+            axes[i, 0].set_title(f'Group 1 - {name}\np-value = {data["p1"]:.6f}\n{result1}')
+            axes[i, 0].set_xlabel('Test Statistic')
+            axes[i, 0].set_ylabel('Density')
+            axes[i, 0].legend()
+            axes[i, 0].grid(True, alpha=0.3)
+
+            # Group 2 plot
+            axes[i, 1].plot(x, y, 'b-', linewidth=2, label='Chi-square (df=2)')
+            axes[i, 1].axvline(data['stat2'], color='red', linewidth=3, label=f'Observed: {data["stat2"]:.3f}')
+            axes[i, 1].axvline(chi2_crit, color='red', linestyle='--', alpha=0.7, label=f'Critical: {chi2_crit:.3f}')
+            axes[i, 1].fill_between(x_reject, chi2.pdf(x_reject, df=2), alpha=0.3, color='red')
+
+            result2 = "✅ Normal" if data['p2'] > alpha else "❌ Non-normal"
+            axes[i, 1].set_title(f'Group 2 - {name}\np-value = {data["p2"]:.6f}\n{result2}')
+            axes[i, 1].set_xlabel('Test Statistic')
+            axes[i, 1].set_ylabel('Density')
+            axes[i, 1].legend()
+            axes[i, 1].grid(True, alpha=0.3)
+
+        plt.suptitle('D\'Agostino-Pearson Normality Tests - All Transformations',
+                     fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        st.pyplot(fig)
+
+    @staticmethod
+    def _plot_normality_summary(all_results, alpha):
+        """Summary plot of normality transformations (simplified without success panel)"""
+        transformations = list(all_results.keys())
+        p_values_g1 = [result[0] for result in all_results.values()]
+        p_values_g2 = [result[1] for result in all_results.values()]
+        success = [result[2] for result in all_results.values()]
+
+        plt.figure(figsize=(12, 6))
+
+        # Bar plot of p-values
+        x = np.arange(len(transformations))
+        width = 0.35
+
+        bars1 = plt.bar(x - width / 2, p_values_g1, width, label='Group 1', alpha=0.8,
+                        color=['green' if p > alpha else 'red' for p in p_values_g1])
+        bars2 = plt.bar(x + width / 2, p_values_g2, width, label='Group 2', alpha=0.8,
+                        color=['green' if p > alpha else 'red' for p in p_values_g2])
+
+        plt.axhline(y=alpha, color='black', linestyle='--', linewidth=2, label=f'α = {alpha}')
+        plt.xlabel('Transformation')
+        plt.ylabel('p-value')
+        plt.title('Normality Test Results - All Transformations')
+        plt.xticks(x, transformations, rotation=45)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+
+    @staticmethod
+    def _plot_hodges_lehmann_bootstrap(group1, group2, hl_estimate, hl_ci):
+        """Enhanced Hodges-Lehmann visualization with pairwise differences and dense bootstrap"""
+
+        # Convert to numpy arrays if they're pandas objects
+        group1 = np.asarray(group1)
+        group2 = np.asarray(group2)
+
+        # Calculate all pairwise differences
+        pairwise_diffs = np.subtract.outer(group1, group2).ravel()
+
+        # Generate dense bootstrap distribution
+        rng = np.random.default_rng(12345)
+        n_boot = 10000  # Increased iterations for better visualization
+        m, n = len(group1), len(group2)
+        boots = np.empty(n_boot)
+
+        for i in range(n_boot):
+            bx = rng.choice(group1, size=m, replace=True)
+            by = rng.choice(group2, size=n, replace=True)
+            boots[i] = np.median(np.subtract.outer(bx, by).ravel())
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+        # Panel 1: Distribution of all pairwise differences with Hodges-Lehmann marked
+        ax1.hist(pairwise_diffs, bins=50, density=True, alpha=0.7, color='lightblue',
+                 edgecolor='black', label=f'All pairwise differences (n={len(pairwise_diffs)})')
+        ax1.axvline(hl_estimate, color='red', linewidth=3,
+                    label=f'Hodges-Lehmann (median): {hl_estimate:.3f}')
+        ax1.axvline(np.mean(pairwise_diffs), color='orange', linewidth=2, linestyle='--',
+                    label=f'Mean difference: {np.mean(pairwise_diffs):.3f}')
+
+        # Add normal distribution overlay for comparison
+        diff_mean, diff_std = np.mean(pairwise_diffs), np.std(pairwise_diffs)
+        x_norm = np.linspace(np.min(pairwise_diffs), np.max(pairwise_diffs), 1000)
+        y_norm = norm.pdf(x_norm, diff_mean, diff_std)
+        ax1.plot(x_norm, y_norm, 'k--', alpha=0.5, label='Normal approximation')
+
+        ax1.set_xlabel('Pairwise Differences (Group1 - Group2)')
+        ax1.set_ylabel('Density')
+        ax1.set_title('Distribution of All Pairwise Differences\n(xi - yj for all i,j pairs)')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Panel 2: Dense bootstrap distribution with comparison to theoretical
+        ax2.hist(boots, bins=80, density=True, alpha=0.7, color='lightgreen',
+                 edgecolor='black', label=f'Bootstrap distribution (n={n_boot})')
+        ax2.axvline(hl_estimate, color='red', linewidth=3,
+                    label=f'Original H-L: {hl_estimate:.3f}')
+        ax2.axvline(hl_ci[0], color='orange', linestyle='--', linewidth=2,
+                    label=f'95% CI: [{hl_ci[0]:.3f}, {hl_ci[1]:.3f}]')
+        ax2.axvline(hl_ci[1], color='orange', linestyle='--', linewidth=2)
+
+        # Fill CI area
+        y_max = ax2.get_ylim()[1]
+        ax2.fill_betweenx([0, y_max], hl_ci[0], hl_ci[1], alpha=0.2, color='orange')
+
+        # Add theoretical normal approximation of bootstrap
+        boot_mean, boot_std = np.mean(boots), np.std(boots)
+        x_boot_norm = np.linspace(np.min(boots), np.max(boots), 1000)
+        y_boot_norm = norm.pdf(x_boot_norm, boot_mean, boot_std)
+        ax2.plot(x_boot_norm, y_boot_norm, 'k--', alpha=0.8, linewidth=2,
+                 label='Normal approximation')
+
+        ax2.set_xlabel('Hodges-Lehmann Estimator')
+        ax2.set_ylabel('Density')
+        ax2.set_title(f'Bootstrap Distribution of H-L Estimator\n(Enhanced with {n_boot:,} iterations)')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # Add interpretation box
+        if hl_ci[0] > 0:
+            interpretation = "Significant positive difference"
+            interpretation_detail = f"Group 1 > Group 2 (p < 0.05)"
+            color = 'green'
+        elif hl_ci[1] < 0:
+            interpretation = "Significant negative difference"
+            interpretation_detail = f"Group 1 < Group 2 (p < 0.05)"
+            color = 'green'
+        else:
+            interpretation = "No significant difference"
+            interpretation_detail = f"CI includes 0 (p ≥ 0.05)"
+            color = 'red'
+
+        # Add interpretation text box
+        textstr = f'{interpretation}\n{interpretation_detail}\nCI width: {hl_ci[1] - hl_ci[0]:.3f}'
+        props = dict(boxstyle='round', facecolor=color, alpha=0.1, edgecolor=color)
+        ax2.text(0.95, 0.95, textstr, transform=ax2.transAxes, fontsize=10, fontweight='bold',
+                 verticalalignment='top', horizontalalignment='right', bbox=props, color=color)
+
+        plt.suptitle('Hodges-Lehmann Estimator Analysis', fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        st.pyplot(fig)
+
+    @staticmethod
+    def _plot_effect_sizes(group1, group2, cohens_d, r_rosenthal):
+        """Overlapping distributions for Cohen's d and Rosenthal's r"""
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+        # Cohen's d visualization
+        mean1, mean2 = np.mean(group1), np.mean(group2)
+        std_pooled = np.sqrt((np.var(group1, ddof=1) + np.var(group2, ddof=1)) / 2)
+
+        x = np.linspace(min(mean1, mean2) - 3 * std_pooled, max(mean1, mean2) + 3 * std_pooled, 1000)
+        y1 = norm.pdf(x, mean1, std_pooled)
+        y2 = norm.pdf(x, mean2, std_pooled)
+
+        ax1.plot(x, y1, 'b-', linewidth=2, label='Group 1')
+        ax1.plot(x, y2, 'r-', linewidth=2, label='Group 2')
+        ax1.fill_between(x, y1, alpha=0.3, color='blue')
+        ax1.fill_between(x, y2, alpha=0.3, color='red')
+
+        # Calculate overlap
+        overlap = 2 * norm.cdf(-abs(cohens_d) / 2)
+
+        # Effect size interpretation
+        if abs(cohens_d) < 0.2:
+            effect_size = "Very small"
+        elif abs(cohens_d) < 0.5:
+            effect_size = "Small"
+        elif abs(cohens_d) < 0.8:
+            effect_size = "Medium"
+        else:
+            effect_size = "Large"
+
+        ax1.set_title(f"Cohen's d = {cohens_d:.3f}\n{effect_size} effect\nOverlap = {overlap * 100:.1f}%")
+        ax1.set_xlabel('Value')
+        ax1.set_ylabel('Density')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Rosenthal's r visualization
+        # Convert r to Cohen's d equivalent for visualization: d = 2r/sqrt(1-r²)
+        if abs(r_rosenthal) < 1:
+            d_equivalent = 2 * r_rosenthal / np.sqrt(1 - r_rosenthal ** 2)
+        else:
+            d_equivalent = cohens_d
+
+        x = np.linspace(-3, 3, 1000)
+        y1 = norm.pdf(x, -d_equivalent / 2, 1)
+        y2 = norm.pdf(x, d_equivalent / 2, 1)
+
+        ax2.plot(x, y1, 'b-', linewidth=2, label='Group 1')
+        ax2.plot(x, y2, 'r-', linewidth=2, label='Group 2')
+        ax2.fill_between(x, y1, alpha=0.3, color='blue')
+        ax2.fill_between(x, y2, alpha=0.3, color='red')
+
+        # r effect size interpretation
+        if abs(r_rosenthal) < 0.1:
+            r_effect_size = "Very small"
+        elif abs(r_rosenthal) < 0.3:
+            r_effect_size = "Small"
+        elif abs(r_rosenthal) < 0.5:
+            r_effect_size = "Medium"
+        else:
+            r_effect_size = "Large"
+
+        ax2.set_title(f"Rosenthal's r = {r_rosenthal:.3f}\n{r_effect_size} effect\n(Equivalent d = {d_equivalent:.3f})")
+        ax2.set_xlabel('Standardized Value')
+        ax2.set_ylabel('Density')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        plt.suptitle('Effect Size Visualizations', fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        st.pyplot(fig)
+
+
 class DataTreatments:
     @staticmethod
-    def categorical_handler(df):
+    def hypothesis_data_handler(df):
         new_df = df.copy()
 
         mapping_dict = {
@@ -362,6 +906,9 @@ class DataTreatments:
 
         return new_df
 
+    def corr_data_handler(df):
+        return None
+
     @staticmethod
     def except_categories():
         return [
@@ -405,30 +952,4 @@ class DataTreatments:
             '¿En relación a su experiencia durante la pandemia, Usted actualmente percibe que su barrio o colonia es…? ',
         ]
 
-class CorrSystem:
-    @staticmethod
-    def do(df):
 
-        df_num = df.select_dtypes(include=["int64", "float64"])
-
-        col_selector = pn.widgets.MultiSelect(
-            name='Columnas',
-            options=df_num.columns.tolist(),
-            size=10
-        )
-
-        @pn.depends(col_selector)
-        def plot_corr(selected):
-            if len(selected) < 2:
-                return "⚠️ Selecciona al menos 2 columnas."
-            corr = df_num[selected].corr()
-            fig = px.imshow(corr, text_auto=True)
-            fig.update_xaxes(showticklabels=True, title_text=None)
-            fig.update_yaxes(showticklabels=True, title_text=None)
-            return fig
-
-        return pn.Column(
-            "# 🔎 Sistema de Correlación",
-            col_selector,
-            plot_corr
-        )
