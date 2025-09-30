@@ -1,23 +1,4 @@
-import os
 import streamlit as st
-
-# -----------------------
-# Configuración interna de tema
-streamlit_folder = os.path.join(os.path.dirname(__file__), ".streamlit")
-os.makedirs(streamlit_folder, exist_ok=True)
-
-config_file = os.path.join(streamlit_folder, "config.toml")
-if not os.path.exists(config_file):
-    with open(config_file, "w") as f:
-        f.write("""
-[theme]
-base="light"
-primaryColor="#1f77b4"
-backgroundColor="#ffffff"
-secondaryBackgroundColor="#f0f2f6"
-textColor="#000000"
-font="sans serif"
-""")
 
 # -----------------------
 # Tu app de Streamlit
