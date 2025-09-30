@@ -9,6 +9,7 @@ from script.lib import CorrSystem, DataTreatments, StatHypothesisTest
 # -----------------------
 st.set_page_config(
     page_title="Mi Reporte Q",
+    page_icon="⚙️",
     #layout="wide"
 )
 
@@ -20,8 +21,7 @@ df = pd.read_excel("data/table/BasedeDatosTransectosJoseLuis.xlsx")
 # -----------------------
 df_corr = df.copy()
 df_corr = df_corr.drop(columns=["Ageb Manzana", "Sexo", "Edad", "Escolaridad", "¿Cuántos años tiene viviendo en este lugar?", "Ponderador"])
-df_corr = DataTreatments.hypothesis_data_handler(df_corr)
-#corr_data_handler
+df_corr = DataTreatments.corr_data_handler(df_corr)
 st.markdown("---")
 st.header("Correlation Analysis Frame")
 

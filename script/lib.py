@@ -481,7 +481,6 @@ class StatHypothesisTest:
             x = np.linspace(-4, 4, 1000)
             y = norm.pdf(x, 0, 1)
 
-            # Convertir U a z-score aproximado
             mean_u = n1 * n2 / 2
             std_u = np.sqrt(n1 * n2 * (n1 + n2 + 1) / 12)
             z_score = (stat - mean_u) / std_u
@@ -489,12 +488,10 @@ class StatHypothesisTest:
             plt.plot(x, y, 'b-', linewidth=2, label='Standard Normal')
             plt.axvline(z_score, color='red', linewidth=3, label=f'Observed z: {z_score:.3f}')
 
-            # Critical regions
             z_crit = norm.ppf(1 - alpha / 2)
             plt.axvline(-z_crit, color='red', linestyle='--', alpha=0.7)
             plt.axvline(z_crit, color='red', linestyle='--', alpha=0.7)
 
-            # Shade rejection regions
             x_left = x[x <= -z_crit]
             x_right = x[x >= z_crit]
             plt.fill_between(x_left, norm.pdf(x_left, 0, 1), alpha=0.3, color='red')
@@ -508,22 +505,28 @@ class StatHypothesisTest:
             plt.plot(x, y, 'b-', linewidth=2, label=f't-distribution (df={df})')
             plt.axvline(stat, color='red', linewidth=3, label=f'Observed t: {stat:.3f}')
 
-            # Critical regions
             t_crit = t.ppf(1 - alpha / 2, df)
             plt.axvline(-t_crit, color='red', linestyle='--', alpha=0.7)
             plt.axvline(t_crit, color='red', linestyle='--', alpha=0.7)
 
-            # Shade rejection regions
             x_left = x[x <= -t_crit]
             x_right = x[x >= t_crit]
             plt.fill_between(x_left, t.pdf(x_left, df), alpha=0.3, color='red')
             plt.fill_between(x_right, t.pdf(x_right, df), alpha=0.3, color='red')
 
+        # -------------------------------
+        # Resultado de significancia
+        conclusion = "✅ Diferencia significativa" if p_val < alpha else "❌ No hay Diferencia significativa"
         plt.title(f'{test_type}\np-value = {p_val:.5f}', fontsize=14, fontweight='bold')
         plt.xlabel('Test Statistic')
         plt.ylabel('Density')
         plt.legend()
         plt.grid(True, alpha=0.3)
+
+        # Agregar texto de conclusión
+        plt.text(0.05, 0.9, conclusion, transform=plt.gca().transAxes,
+                 fontsize=12, fontweight='bold', color='green' if p_val < alpha else 'red')
+
         plt.tight_layout()
         st.pyplot(plt)
 
@@ -906,8 +909,70 @@ class DataTreatments:
 
         return new_df
 
+    @staticmethod
     def corr_data_handler(df):
-        return None
+        new_df = df.copy()
+
+        # Definir umbrales para variables con muchos valores únicos
+        HIGH_CARDINALITY_THRESHOLD = 20
+
+        # 1. Identificar todas las columnas a procesar
+        columns_to_process = []
+        columns_to_drop = []
+
+        for col in new_df.columns:
+            # Excluir columnas que no debemos tocar
+            if col in ['Transecto', 'Ponderador']:
+                continue
+
+            # Procesar todas las demás columnas
+            columns_to_process.append(col)
+
+        # 2. Procesar cada columna
+        for col in columns_to_process:
+            unique_values = new_df[col].dropna().unique()
+            n_unique = len(unique_values)
+
+            # Si la columna tiene muchos valores únicos, crear rangos
+            if n_unique > HIGH_CARDINALITY_THRESHOLD:
+                # Variables monetarias (Luz, Agua, Gas)
+                if 'Luz' in col and 'mensualmente' in col:
+                    bins = [0, 200, 500, 1000, float('inf')]
+                    labels = ['Bajo (0-200)', 'Medio (201-500)', 'Alto (501-1000)', 'Muy alto (1000+)']
+                    # Limpiar valores inválidos
+                    new_df[col] = new_df[col].apply(lambda x: np.nan if x >= 9999999 else x)
+                    new_df[col] = pd.cut(new_df[col], bins=bins, labels=labels, include_lowest=True)
+                    unique_values = labels
+
+                elif 'Agua' in col and 'mensualmente' in col:
+                    bins = [0, 150, 300, 600, float('inf')]
+                    labels = ['Bajo (0-150)', 'Medio (151-300)', 'Alto (301-600)', 'Muy alto (600+)']
+                    new_df[col] = new_df[col].apply(lambda x: np.nan if x >= 9999999 else x)
+                    new_df[col] = pd.cut(new_df[col], bins=bins, labels=labels, include_lowest=True)
+                    unique_values = labels
+
+                elif 'Gas' in col and 'mensualmente' in col:
+                    bins = [0, 200, 400, 700, float('inf')]
+                    labels = ['Bajo (0-200)', 'Medio (201-400)', 'Alto (401-700)', 'Muy alto (700+)']
+                    new_df[col] = new_df[col].apply(lambda x: np.nan if pd.isna(x) or x >= 9999999 else x)
+                    new_df[col] = pd.cut(new_df[col], bins=bins, labels=labels, include_lowest=True)
+                    unique_values = labels
+
+            # 3. Crear columnas dummy para cada valor único
+            for value in unique_values:
+                # Nombre de la nueva columna
+                new_col_name = f"{col}_{value}"
+
+                # Crear columna binaria
+                new_df[new_col_name] = (new_df[col] == value).astype(int)
+
+            # Marcar columna original para eliminar
+            columns_to_drop.append(col)
+
+        # 4. Eliminar columnas originales
+        new_df = new_df.drop(columns=columns_to_drop)
+
+        return new_df
 
     @staticmethod
     def except_categories():
