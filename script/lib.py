@@ -26,7 +26,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import plotly.graph_objects as go
 import scipy.stats as stats
-
+from mord import LogisticAT
 
 class CorrSystem:
     @staticmethod
@@ -43,6 +43,37 @@ class CorrSystem:
 
         st.markdown("### 🎯 Selección de Variables")
 
+        # ⭐ SELECTOR DE MODO
+        st.markdown("#### 🔧 Modo de Análisis")
+
+        analysis_mode = st.radio(
+            "Selecciona el modo de correlación",
+            options=['individual', 'multiple'],
+            format_func=lambda x: {
+                'individual': '🎯 Correlación Individual (una pregunta vs todas)',
+                'multiple': '📊 Correlación Múltiple (varias preguntas entre sí)'
+            }[x],
+            horizontal=True,
+            help="Múltiple: analiza correlaciones entre varias preguntas. Individual: enfoca en una pregunta vs todas las demás."
+        )
+
+
+        if analysis_mode == 'multiple':
+            # ════════════════════════════════════════════
+            # MODO MÚLTIPLE (código original)
+            # ════════════════════════════════════════════
+            CorrSystem._handle_multiple_mode(df_num, question_groups)
+
+        else:
+            # ════════════════════════════════════════════
+            # MODO INDIVIDUAL (nuevo)
+            # ════════════════════════════════════════════
+            CorrSystem._handle_individual_mode(df_num, question_groups)
+
+    @staticmethod
+    def _handle_multiple_mode(df_num, question_groups):
+        """Modo múltiple - código original sin cambios"""
+
         # Mostrar información de agrupación
         col1, col2 = st.columns([3, 1])
 
@@ -51,7 +82,7 @@ class CorrSystem:
             st.metric("Variables totales", len(df_num.columns))
 
         with col1:
-            # ⭐ SELECTOR POR PREGUNTA (no por variable individual)
+            # Selector por pregunta
             selected_questions = st.multiselect(
                 "Selecciona las preguntas a analizar",
                 options=list(question_groups.keys()),
@@ -64,12 +95,12 @@ class CorrSystem:
             st.warning("⚠️ Selecciona al menos 2 preguntas para calcular correlaciones.")
             return
 
-        # ⭐ EXPANDIR LAS PREGUNTAS SELECCIONADAS A SUS VARIABLES
+        # Expandir preguntas a variables
         selected_columns = []
         for question in selected_questions:
             selected_columns.extend(question_groups[question])
 
-        # Mostrar resumen de selección
+        # Mostrar resumen
         with st.expander("📋 Ver detalle de variables seleccionadas", expanded=False):
             for question in selected_questions:
                 st.markdown(f"**{question}**")
@@ -82,10 +113,10 @@ class CorrSystem:
             st.warning("⚠️ Demasiadas variables. Considera seleccionar menos preguntas para mejor visualización.")
             return
 
-        # ⭐ CALCULAR CORRELACIÓN
+        # Calcular correlación
         corr = df_num[selected_columns].corr()
 
-        # ⭐ TABS PARA DIFERENTES VISUALIZACIONES
+        # Tabs
         tab1, tab2, tab3, tab4 = st.tabs(["📊 Heatmap", "🔝 Top Correlaciones", "📈 Detalles", "🔍 Entre Preguntas"])
 
         with tab1:
@@ -101,48 +132,341 @@ class CorrSystem:
             CorrSystem._show_cross_question_correlations(corr, selected_questions, question_groups)
 
     @staticmethod
+    def _handle_individual_mode(df_num, question_groups):
+        """Modo individual - una pregunta vs todas"""
+
+        st.markdown("#### 🎯 Correlación Individual")
+
+        # Información general
+        col1, col2 = st.columns([3, 1])
+
+        with col2:
+            st.metric("Preguntas disponibles", len(question_groups))
+            st.metric("Variables totales", len(df_num.columns))
+
+        with col1:
+            # Selector de pregunta de referencia
+            reference_question = st.selectbox(
+                "Selecciona la pregunta de referencia",
+                options=list(question_groups.keys()),
+                help="Se calcularán las correlaciones de TODAS las categorías de esta pregunta contra todas las demás variables"
+            )
+
+        # Mostrar categorías de la pregunta de referencia
+        reference_vars = question_groups[reference_question]
+        st.info(
+            f"📋 Pregunta de referencia: **{reference_question}** ({len(reference_vars)} categorías: {', '.join([v.split('_')[-1] for v in reference_vars])})")
+
+        # Configuración simplificada
+        st.markdown("#### ⚙️ Configuración")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            top_n = st.slider(
+                "Número de correlaciones a mostrar",
+                min_value=10,
+                max_value=200,
+                value=50,
+                step=10,
+                help="Muestra las N correlaciones más fuertes (ordenadas por valor absoluto)"
+            )
+
+        with col2:
+            sort_by = st.radio(
+                "Ordenar por",
+                options=['abs', 'positive', 'negative'],
+                format_func=lambda x: {
+                    'abs': 'Valor Absoluto (más fuerte)',
+                    'positive': 'Más Positivas',
+                    'negative': 'Más Negativas'
+                }[x],
+                horizontal=False
+            )
+
+        # Calcular correlaciones
+        with st.spinner("Calculando correlaciones..."):
+            all_correlations = CorrSystem._calculate_all_individual_correlations(
+                df_num,
+                reference_question,
+                reference_vars,
+                question_groups
+            )
+
+        if not all_correlations:
+            st.warning("⚠️ No se encontraron correlaciones.")
+            return
+
+        # Crear DataFrame
+        df_corr = pd.DataFrame(all_correlations)
+
+        # Ordenar según selección
+        if sort_by == 'abs':
+            df_corr = df_corr.sort_values('Correlacion_Abs', ascending=False)
+        elif sort_by == 'positive':
+            df_corr = df_corr.sort_values('Correlacion', ascending=False)
+        else:  # negative
+            df_corr = df_corr.sort_values('Correlacion', ascending=True)
+
+        # Tomar top N
+        df_display = df_corr.head(top_n)
+
+        # Mostrar tabla
+        st.markdown(f"### 📊 Top {top_n} Correlaciones")
+        st.markdown(
+            f"Ordenadas por: **{ {'abs': 'Valor Absoluto', 'positive': 'Más Positivas', 'negative': 'Más Negativas'}[sort_by] }**")
+
+        # Formatear nombres de columnas
+        df_display_formatted = df_display[[
+            'Pregunta_Destino',
+            'Categoria_Referencia',
+            'Categoria_Destino',
+            'Correlacion'
+        ]].copy()
+
+        df_display_formatted.columns = ['Pregunta', 'Cat. Referencia', 'Cat. Destino', 'Correlación']
+
+        # Mostrar con estilo
+        st.dataframe(
+            df_display_formatted.style.format({'Correlación': '{:.4f}'})
+            .background_gradient(subset=['Correlación'], cmap='RdBu_r', vmin=-1, vmax=1),
+            use_container_width=True,
+            height=600
+        )
+
+        # Estadísticas rápidas
+        col1, col2, col4 = st.columns(3)
+
+        with col1:
+            st.metric("Correlación Máxima", f"{df_corr['Correlacion'].max():.3f}")
+        with col2:
+            st.metric("Correlación Mínima", f"{df_corr['Correlacion'].min():.3f}")
+        with col4:
+            st.metric("Total Correlaciones", len(df_corr))
+
+        # Exportar (simplificado)
+        st.markdown("### 📥 Exportar")
+
+        csv = df_corr.to_csv(index=False)
+        st.download_button(
+            label="📥 Descargar Todas las Correlaciones (CSV)",
+            data=csv,
+            file_name=f"correlaciones_{reference_question.replace(' ', '_')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+    @staticmethod
+    def _calculate_all_individual_correlations(df_num, reference_question, reference_vars, question_groups):
+        """
+        Calcula TODAS las correlaciones individuales y las retorna en una lista plana
+        """
+        # Calcular matriz de correlación completa
+        corr_matrix = df_num.corr()
+
+        all_correlations = []
+
+        for target_question, target_vars in question_groups.items():
+            # Saltar la misma pregunta de referencia
+            if target_question == reference_question:
+                continue
+
+            # Calcular todas las correlaciones entre ref y target
+            for ref_var in reference_vars:
+                for target_var in target_vars:
+                    if ref_var in corr_matrix.columns and target_var in corr_matrix.columns:
+                        corr_value = corr_matrix.loc[ref_var, target_var]
+
+                        all_correlations.append({
+                            'Pregunta_Referencia': reference_question,
+                            'Variable_Referencia': ref_var,
+                            'Categoria_Referencia': ref_var.split('_')[-1],
+                            'Pregunta_Destino': target_question,
+                            'Variable_Destino': target_var,
+                            'Categoria_Destino': target_var.split('_')[-1],
+                            'Correlacion': corr_value,
+                            'Correlacion_Abs': abs(corr_value)
+                        })
+
+        return all_correlations
+
+    @staticmethod
+    def _show_individual_ranking(top_results, reference_question, show_details):
+        """Muestra el ranking de preguntas con mayor correlación"""
+
+        st.markdown("### 🏆 Ranking de Preguntas")
+        st.markdown(f"Correlaciones con respecto a: **{reference_question}**")
+
+        for rank, (question, data) in enumerate(top_results, 1):
+            # Card por pregunta
+            with st.container():
+                st.markdown(f"#### #{rank} - {question}")
+
+                # Métricas
+                col1, col2, col3, col4 = st.columns(4)
+
+                with col1:
+                    st.metric("Promedio", f"{data['avg_corr']:.3f}")
+                with col2:
+                    st.metric("Promedio (abs)", f"{data['avg_corr_abs']:.3f}")
+                with col3:
+                    st.metric("Máxima (abs)", f"{data['max_corr_abs']:.3f}")
+                with col4:
+                    st.metric("N° Correlaciones", data['n_correlations'])
+
+                # Detalles expandibles
+                if show_details:
+                    with st.expander(f"📋 Ver {len(data['correlations'])} correlaciones individuales"):
+                        # Crear DataFrame
+                        df_details = pd.DataFrame(data['correlations'])
+
+                        # Ordenar por correlación absoluta
+                        df_details['abs_corr'] = df_details['correlation'].abs()
+                        df_details = df_details.sort_values('abs_corr', ascending=False)
+
+                        # Formatear para mostrar
+                        df_display = df_details[[
+                            'var_ref_category',
+                            'var_target_category',
+                            'correlation'
+                        ]].copy()
+                        df_display.columns = ['Categoría Referencia', 'Categoría Destino', 'Correlación']
+
+                        # Mostrar con formato
+                        st.dataframe(
+                            df_display.style.format({'Correlación': '{:.4f}'})
+                            .background_gradient(subset=['Correlación'], cmap='RdBu_r', vmin=-1, vmax=1),
+                            use_container_width=True,
+                            height=min(400, len(df_display) * 35 + 38)
+                        )
+
+                        # Destacar máximos
+                        max_positive = df_details.loc[df_details['correlation'].idxmax()]
+                        max_negative = df_details.loc[df_details['correlation'].idxmin()]
+
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            st.success(f"""
+                            **Mayor correlación positiva:**  
+                            `{max_positive['var_ref_category']}` ↔ `{max_positive['var_target_category']}`  
+                            **r = {max_positive['correlation']:.4f}**
+                            """)
+
+                        with col_b:
+                            if max_negative['correlation'] < 0:
+                                st.error(f"""
+                                **Mayor correlación negativa:**  
+                                `{max_negative['var_ref_category']}` ↔ `{max_negative['var_target_category']}`  
+                                **r = {max_negative['correlation']:.4f}**
+                                """)
+
+                st.markdown("---")
+
+    @staticmethod
+    def _show_individual_export(results, reference_question):
+        """Opciones de exportación para modo individual"""
+
+        st.markdown("### 📥 Exportar Resultados")
+
+        # Crear DataFrame completo
+        export_data = []
+
+        for question, data in sorted(results.items(), key=lambda x: x[1]['avg_corr_abs'], reverse=True):
+            for corr in data['correlations']:
+                export_data.append({
+                    'Pregunta_Referencia': reference_question,
+                    'Variable_Referencia': corr['var_ref'],
+                    'Categoria_Referencia': corr['var_ref_category'],
+                    'Pregunta_Destino': question,
+                    'Variable_Destino': corr['var_target'],
+                    'Categoria_Destino': corr['var_target_category'],
+                    'Correlacion': corr['correlation'],
+                    'Correlacion_Abs': abs(corr['correlation'])
+                })
+
+        df_export = pd.DataFrame(export_data)
+
+        # Mostrar preview
+        st.markdown("#### Vista Previa")
+        st.dataframe(
+            df_export.head(20).style.format({'Correlacion': '{:.4f}', 'Correlacion_Abs': '{:.4f}'}),
+            use_container_width=True
+        )
+
+        st.info(f"📊 Total de correlaciones: **{len(df_export)}**")
+
+        # Botón de descarga
+        csv = df_export.to_csv(index=False)
+        st.download_button(
+            label="📥 Descargar Todas las Correlaciones (CSV)",
+            data=csv,
+            file_name=f"correlaciones_individuales_{reference_question.replace(' ', '_')}.csv",
+            mime="text/csv"
+        )
+
+        # Resumen por pregunta
+        st.markdown("---")
+        st.markdown("#### Resumen por Pregunta")
+
+        summary_data = []
+        for question, data in sorted(results.items(), key=lambda x: x[1]['avg_corr_abs'], reverse=True):
+            summary_data.append({
+                'Pregunta': question,
+                'Correlacion_Promedio': data['avg_corr'],
+                'Correlacion_Promedio_Abs': data['avg_corr_abs'],
+                'Correlacion_Maxima': data['max_corr'],
+                'Correlacion_Maxima_Abs': data['max_corr_abs'],
+                'N_Correlaciones': data['n_correlations']
+            })
+
+        df_summary = pd.DataFrame(summary_data)
+
+        st.dataframe(
+            df_summary.style.format({
+                'Correlacion_Promedio': '{:.4f}',
+                'Correlacion_Promedio_Abs': '{:.4f}',
+                'Correlacion_Maxima': '{:.4f}',
+                'Correlacion_Maxima_Abs': '{:.4f}'
+            }),
+            use_container_width=True
+        )
+
+        csv_summary = df_summary.to_csv(index=False)
+        st.download_button(
+            label="📥 Descargar Resumen por Pregunta (CSV)",
+            data=csv_summary,
+            file_name=f"resumen_correlaciones_{reference_question.replace(' ', '_')}.csv",
+            mime="text/csv"
+        )
+
+    # ════════════════════════════════════════════════════════
+    # Métodos auxiliares (sin cambios)
+    # ════════════════════════════════════════════════════════
+
+    @staticmethod
     def _group_columns_by_question(columns):
-        """
-        Agrupa las columnas por su pregunta base.
-
-        Ejemplo:
-        'Luz mensual_Bajo' -> 'Luz mensual'
-        'Luz mensual_Medio' -> 'Luz mensual'
-        'Agua mensual_Alto' -> 'Agua mensual'
-
-        Returns:
-            dict: {'Pregunta base': ['col1', 'col2', ...]}
-        """
+        """Agrupa las columnas por su pregunta base"""
         question_groups = {}
 
         for col in columns:
-            # Buscar el último '_' que separa pregunta de categoría
             if '_' in col:
-                # Separar en pregunta base y categoría
-                parts = col.rsplit('_', 1)  # rsplit para tomar el ÚLTIMO '_'
+                parts = col.rsplit('_', 1)
                 question_base = parts[0]
-
-                # Limpiar nombre de pregunta
                 question_base = CorrSystem._clean_question_name(question_base)
 
                 if question_base not in question_groups:
                     question_groups[question_base] = []
                 question_groups[question_base].append(col)
             else:
-                # Variables sin categoría (no deberían existir después del encoding)
                 if "Sin categoría" not in question_groups:
                     question_groups["Sin categoría"] = []
                 question_groups["Sin categoría"].append(col)
 
-        # Ordenar alfabéticamente
         return dict(sorted(question_groups.items()))
 
     @staticmethod
     def _clean_question_name(question):
-        """
-        Limpia y acorta el nombre de la pregunta para mejor legibilidad
-        """
-        # Remover prefijos comunes de preguntas
+        """Limpia y acorta el nombre de la pregunta"""
         replacements = {
             "¿Cuánto paga mensualmente de ": "",
             "¿Cuánto paga de ": "",
@@ -157,7 +481,6 @@ class CorrSystem:
         for old, new in replacements.items():
             cleaned = cleaned.replace(old, new)
 
-        # Capitalizar primera letra
         cleaned = cleaned.strip()
         if cleaned:
             cleaned = cleaned[0].upper() + cleaned[1:]
@@ -166,15 +489,10 @@ class CorrSystem:
 
     @staticmethod
     def _plot_heatmap(corr, selected_columns, question_groups):
-        """
-        Crea un heatmap de correlación con agrupación visual por preguntas
-        """
+        """Heatmap para modo múltiple"""
         st.markdown("#### Matriz de Correlación")
 
-        # Acortar nombres solo para visualización
         display_names = [col.split('_')[-1] for col in selected_columns]
-
-        # Crear figura
         n_vars = len(selected_columns)
         height = max(500, min(n_vars * 25, 1200))
 
@@ -190,52 +508,33 @@ class CorrSystem:
             y=display_names
         )
 
-        fig.update_xaxes(
-            side="bottom",
-            tickangle=45,
-            showticklabels=True
-        )
-        fig.update_yaxes(
-            showticklabels=True
-        )
-
-        fig.update_layout(
-            height=height,
-            title="Matriz de Correlaciones (Pearson)",
-            title_x=0.5
-        )
+        fig.update_xaxes(side="bottom", tickangle=45, showticklabels=True)
+        fig.update_yaxes(showticklabels=True)
+        fig.update_layout(height=height, title="Matriz de Correlaciones (Pearson)", title_x=0.5)
 
         st.plotly_chart(fig, use_container_width=True)
 
-        # Leyenda interpretativa
         st.info("""
         **Interpretación:**
         - 🔵 **Azul** (≈1): Correlación positiva fuerte
         - ⚪ **Blanco** (≈0): Sin correlación
         - 🔴 **Rojo** (≈-1): Correlación negativa fuerte
-
-        💡 **Tip:** Las categorías de la misma pregunta suelen tener correlaciones negativas entre sí (son mutuamente excluyentes).
         """)
 
     @staticmethod
     def _show_top_correlations(corr):
-        """
-        Muestra las correlaciones más fuertes (filtrando correlaciones dentro de la misma pregunta)
-        """
+        """Top correlaciones para modo múltiple"""
         st.markdown("#### Top Correlaciones más Fuertes")
 
-        # Extraer pares únicos
         corr_pairs = []
         for i in range(len(corr.columns)):
             for j in range(i + 1, len(corr.columns)):
                 var1 = corr.columns[i]
                 var2 = corr.columns[j]
 
-                # ⭐ FILTRAR: No mostrar correlaciones dentro de la misma pregunta
                 question1 = var1.rsplit('_', 1)[0] if '_' in var1 else var1
                 question2 = var2.rsplit('_', 1)[0] if '_' in var2 else var2
 
-                # Solo incluir si son de preguntas diferentes
                 if question1 != question2:
                     corr_pairs.append({
                         'Variable 1': var1,
@@ -251,7 +550,6 @@ class CorrSystem:
         df_pairs = pd.DataFrame(corr_pairs)
         df_pairs = df_pairs.sort_values('Abs_Corr', ascending=False)
 
-        # Mostrar top 15
         col1, col2 = st.columns(2)
 
         with col1:
@@ -278,23 +576,19 @@ class CorrSystem:
             else:
                 st.info("No hay correlaciones negativas significativas")
 
-        # Distribución
-        st.markdown("##### Distribución de Correlaciones (entre preguntas diferentes)")
+        st.markdown("##### Distribución de Correlaciones")
         fig = px.histogram(
             df_pairs,
             x='Correlación',
             nbins=50,
-            title="Distribución de correlaciones entre diferentes preguntas",
-            labels={'Correlación': 'Coeficiente de Correlación', 'count': 'Frecuencia'}
+            title="Distribución de correlaciones entre diferentes preguntas"
         )
         fig.add_vline(x=0, line_dash="dash", line_color="red")
         st.plotly_chart(fig, use_container_width=True)
 
     @staticmethod
     def _show_correlation_table(corr):
-        """
-        Muestra la tabla completa de correlaciones
-        """
+        """Tabla completa para modo múltiple"""
         st.markdown("#### Matriz de Correlación Completa")
 
         st.dataframe(
@@ -303,7 +597,6 @@ class CorrSystem:
             height=600
         )
 
-        # Descarga
         csv = corr.to_csv(index=True)
         st.download_button(
             label="📥 Descargar Matriz de Correlación (CSV)",
@@ -312,7 +605,6 @@ class CorrSystem:
             mime="text/csv"
         )
 
-        # Estadísticas (solo correlaciones entre diferentes preguntas)
         st.markdown("#### Estadísticas de Correlación")
 
         mask = np.triu(np.ones_like(corr, dtype=bool), k=1)
@@ -332,24 +624,17 @@ class CorrSystem:
 
     @staticmethod
     def _show_cross_question_correlations(corr, selected_questions, question_groups):
-        """
-        Nueva pestaña: Muestra correlaciones PROMEDIO entre pares de preguntas
-        """
+        """Correlaciones entre preguntas para modo múltiple"""
         st.markdown("#### Correlaciones Promedio Entre Preguntas")
-        st.markdown(
-            "Esta vista muestra la correlación promedio entre todas las categorías de dos preguntas diferentes.")
 
-        # Calcular matriz de correlaciones promedio entre preguntas
         question_corr_data = []
 
         for i, q1 in enumerate(selected_questions):
             for j, q2 in enumerate(selected_questions):
-                if i < j:  # Solo mitad superior (sin diagonal)
-                    # Obtener todas las variables de cada pregunta
+                if i < j:
                     vars_q1 = question_groups[q1]
                     vars_q2 = question_groups[q2]
 
-                    # Calcular correlación promedio entre todas las combinaciones
                     correlations = []
                     for v1 in vars_q1:
                         for v2 in vars_q2:
@@ -375,7 +660,6 @@ class CorrSystem:
         df_question_corr = pd.DataFrame(question_corr_data)
         df_question_corr = df_question_corr.sort_values('Correlación Máxima (abs)', ascending=False)
 
-        # Mostrar tabla
         st.dataframe(
             df_question_corr.style.format({
                 'Correlación Promedio': '{:.3f}',
@@ -386,11 +670,9 @@ class CorrSystem:
             height=400
         )
 
-        # Heatmap de correlaciones promedio entre preguntas
         if len(selected_questions) > 2:
             st.markdown("##### Mapa de Correlaciones Entre Preguntas")
 
-            # Crear matriz cuadrada
             question_corr_matrix = pd.DataFrame(
                 np.zeros((len(selected_questions), len(selected_questions))),
                 index=selected_questions,
@@ -404,7 +686,6 @@ class CorrSystem:
                 question_corr_matrix.loc[q1, q2] = corr_val
                 question_corr_matrix.loc[q2, q1] = corr_val
 
-            # Diagonal = 1
             np.fill_diagonal(question_corr_matrix.values, 1)
 
             fig = px.imshow(
@@ -417,13 +698,9 @@ class CorrSystem:
                 labels=dict(color="Correlación Promedio")
             )
 
-            fig.update_layout(
-                height=600,
-                title="Correlación Promedio entre Preguntas"
-            )
+            fig.update_layout(height=600, title="Correlación Promedio entre Preguntas")
 
             st.plotly_chart(fig, use_container_width=True)
-
 
 class RegressionSystem:
     REGRESSION_TYPES = {
@@ -525,10 +802,9 @@ class RegressionSystem:
         with col1:
             selection_method = st.radio(
                 "Método de selección",
-                options=['manual', 'by_question', 'by_correlation'],
+                options=['manual', 'by_correlation'],
                 format_func=lambda x: {
                     'manual': '📝 Selección manual (variables individuales)',
-                    'by_question': '📋 Por pregunta (grupos automáticos)',
                     'by_correlation': '🔗 Por correlación con Y (top N)'
                 }[x],
                 horizontal=True
@@ -2033,6 +2309,455 @@ class RegressionSystem:
                 """, language='python')
 
 class StatHypothesisTest:
+
+    @staticmethod
+    def do(df):
+        """Orquestador principal del sistema de pruebas de hipótesis"""
+
+        st.markdown("### 🧪 Pruebas de Hipótesis Estadísticas")
+
+        st.markdown("""
+        Este módulo permite comparar dos grupos usando pruebas estadísticas apropiadas.
+        El sistema automáticamente:
+        1. 🔍 Evalúa normalidad (con transformaciones si es necesario)
+        2. 📊 Verifica homogeneidad de varianzas
+        3. ✅ Aplica la prueba estadística correcta
+        4. 📈 Calcula tamaños de efecto
+        """)
+
+        # Verificar que existe columna Transecto
+        if "Transecto" not in df.columns:
+            st.error("❌ El dataset debe contener una columna 'Transecto' para agrupar los datos.")
+            return
+
+        # Paso 1: Selección de variable
+        st.markdown("---")
+        st.markdown("#### 📋 Paso 1: Seleccionar Variable a Analizar")
+
+        # Obtener columnas numéricas (excluyendo Transecto)
+        numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+        if 'Transecto' in numeric_cols:
+            numeric_cols.remove('Transecto')
+
+        if not numeric_cols:
+            st.error("❌ No hay columnas numéricas disponibles para análisis.")
+            return
+
+        selected_variable = st.selectbox(
+            "Selecciona la variable a comparar entre transectos",
+            options=numeric_cols,
+            help="Variable numérica que se comparará entre los diferentes transectos"
+        )
+
+        # Información de la variable
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Variable seleccionada", selected_variable)
+        with col2:
+            st.metric("Transectos disponibles", df['Transecto'].nunique())
+        with col3:
+            st.metric("Observaciones totales", len(df[selected_variable].dropna()))
+
+        # Paso 2: Selección de transectos
+        st.markdown("---")
+        st.markdown("#### 🎯 Paso 2: Seleccionar Transectos a Comparar")
+
+        transects = sorted(df['Transecto'].unique())
+
+        if len(transects) < 2:
+            st.error("❌ Se necesitan al menos 2 transectos para comparar.")
+            return
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            transect1 = st.selectbox(
+                "Transecto 1 (Grupo de referencia)",
+                options=transects,
+                index=0
+            )
+
+        with col2:
+            available_transects2 = [t for t in transects if t != transect1]
+            transect2 = st.selectbox(
+                "Transecto 2 (Grupo de comparación)",
+                options=available_transects2,
+                index=0 if available_transects2 else None
+            )
+
+        # Extraer grupos
+        group1 = pd.to_numeric(df[df["Transecto"] == transect1][selected_variable], errors="coerce").dropna()
+        group2 = pd.to_numeric(df[df["Transecto"] == transect2][selected_variable], errors="coerce").dropna()
+
+        # Validar tamaños
+        if len(group1) < 3 or len(group2) < 3:
+            st.error("❌ Cada grupo debe tener al menos 3 observaciones válidas.")
+            return
+
+        # Mostrar información de grupos
+        st.markdown("##### 📊 Información de los Grupos")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown(f"**Transecto {transect1}**")
+            st.metric("N", len(group1))
+            st.metric("Media", f"{group1.mean():.2f}")
+            st.metric("Desv. Std", f"{group1.std():.2f}")
+
+        with col2:
+            st.markdown(f"**Transecto {transect2}**")
+            st.metric("N", len(group2))
+            st.metric("Media", f"{group2.mean():.2f}")
+            st.metric("Desv. Std", f"{group2.std():.2f}")
+
+        # Visualización previa
+        with st.expander("📊 Vista Previa de los Datos", expanded=False):
+            fig = go.Figure()
+
+            fig.add_trace(go.Box(
+                y=group1,
+                name=f'Transecto {transect1}',
+                marker_color='lightblue'
+            ))
+
+            fig.add_trace(go.Box(
+                y=group2,
+                name=f'Transecto {transect2}',
+                marker_color='lightcoral'
+            ))
+
+            fig.update_layout(
+                title=f"Distribución de {selected_variable}",
+                yaxis_title=selected_variable,
+                showlegend=True,
+                height=400
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Paso 3: Configuración
+        st.markdown("---")
+        st.markdown("#### ⚙️ Paso 3: Configuración")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            alpha = st.slider(
+                "Nivel de significancia (α)",
+                min_value=0.01,
+                max_value=0.10,
+                value=0.05,
+                step=0.01,
+                help="Probabilidad de rechazar H0 cuando es verdadera (típicamente 0.05)"
+            )
+
+        with col2:
+            show_plots = st.checkbox(
+                "Mostrar visualizaciones detalladas",
+                value=True,
+                help="Incluye gráficos de normalidad, homogeneidad y efectos"
+            )
+
+        # Botón de análisis
+        st.markdown("---")
+        if st.button("🚀 Ejecutar Análisis Completo", type="primary", use_container_width=True):
+
+            with st.spinner("Ejecutando análisis estadístico..."):
+
+                # ═══════════════════════════════════════
+                # FASE 1: ANÁLISIS DE NORMALIDAD
+                # ═══════════════════════════════════════
+                st.markdown("---")
+                st.markdown("## 📊 Fase 1: Análisis de Normalidad")
+
+                with st.expander("ℹ️ ¿Qué es la prueba de normalidad?", expanded=False):
+                    st.markdown("""
+                    La **Prueba de D'Agostino-Pearson** evalúa si los datos siguen una distribución normal.
+
+                    **¿Por qué es importante?**
+                    - Las pruebas paramétricas (t-test) asumen normalidad
+                    - Si los datos no son normales, usamos pruebas no paramétricas (Mann-Whitney U)
+
+                    **Transformaciones disponibles:**
+                    1. **Original**: Datos sin transformar
+                    2. **Logarítmica**: Para datos con sesgo positivo
+                    3. **Raíz cuadrada**: Para datos con varianza proporcional a la media
+                    4. **Box-Cox**: Transformación óptima automática
+                    """)
+
+                g1_transformed, g2_transformed, transformation, norm_params, is_normal = \
+                    StatHypothesisTest.analize_distribution_normality(
+                        group1.values, group2.values, alpha=alpha, plot=show_plots
+                    )
+
+                # Mostrar resultado de normalidad
+                if is_normal:
+                    st.success(f"""
+                    ✅ **Normalidad Alcanzada**
+
+                    - Transformación utilizada: **{transformation.upper()}**
+                    - p-valor Grupo 1: {norm_params['p1']:.6f}
+                    - p-valor Grupo 2: {norm_params['p2']:.6f}
+
+                    Ambos grupos cumplen con la asunción de normalidad (p > {alpha})
+                    """)
+                else:
+                    st.warning(f"""
+                    ⚠️ **Normalidad NO Alcanzada**
+
+                    - Ninguna transformación logró normalidad
+                    - Se usarán datos originales
+                    - Se aplicará prueba **no paramétrica** (Mann-Whitney U)
+                    """)
+
+                # ═══════════════════════════════════════
+                # FASE 2: HOMOGENEIDAD DE VARIANZAS
+                # ═══════════════════════════════════════
+                st.markdown("---")
+                st.markdown("## 📊 Fase 2: Homogeneidad de Varianzas")
+
+                with st.expander("ℹ️ ¿Qué es la prueba de homogeneidad?", expanded=False):
+                    st.markdown("""
+                    La **Prueba de Levene** evalúa si las varianzas de ambos grupos son iguales.
+
+                    **¿Por qué es importante?**
+                    - El t-test estándar asume varianzas iguales
+                    - Si las varianzas son diferentes, usamos el test de Welch
+
+                    **Interpretación:**
+                    - p > α: Varianzas homogéneas → t-test estándar
+                    - p < α: Varianzas heterogéneas → Welch's t-test
+                    """)
+
+                stat_levene, p_levene, is_homogeneous = \
+                    StatHypothesisTest.analize_distributions_homogeneity(
+                        g1_transformed, g2_transformed, alpha=alpha, plot=show_plots
+                    )
+
+                # Mostrar resultado de homogeneidad
+                if is_homogeneous:
+                    st.success(f"""
+                    ✅ **Varianzas Homogéneas**
+
+                    - Estadístico de Levene: {stat_levene:.4f}
+                    - p-valor: {p_levene:.6f}
+
+                    Las varianzas son similares entre grupos (p > {alpha})
+                    """)
+                else:
+                    st.info(f"""
+                    ℹ️ **Varianzas Heterogéneas**
+
+                    - Estadístico de Levene: {stat_levene:.4f}
+                    - p-valor: {p_levene:.6f}
+
+                    Las varianzas difieren significativamente (p < {alpha})
+                    Se ajustará la prueba estadística
+                    """)
+
+                # ═══════════════════════════════════════
+                # FASE 3: PRUEBA ESTADÍSTICA
+                # ═══════════════════════════════════════
+                st.markdown("---")
+                st.markdown("## 📊 Fase 3: Prueba de Hipótesis")
+
+                # Determinar prueba a usar
+                if is_normal and is_homogeneous:
+                    test_name = "t-test Independiente"
+                    test_description = "Prueba paramétrica para comparar medias con varianzas homogéneas"
+                elif is_normal and not is_homogeneous:
+                    test_name = "Welch's t-test"
+                    test_description = "Prueba paramétrica para comparar medias con varianzas heterogéneas"
+                else:
+                    test_name = "Mann-Whitney U"
+                    test_description = "Prueba no paramétrica para comparar distribuciones"
+
+                st.info(f"""
+                **Prueba seleccionada:** {test_name}
+
+                {test_description}
+                """)
+
+                with st.expander("ℹ️ Interpretación de la prueba", expanded=False):
+                    st.markdown(f"""
+                    **Hipótesis:**
+                    - H₀: No hay diferencia entre los grupos
+                    - H₁: Existe diferencia significativa entre los grupos
+
+                    **Criterio de decisión:**
+                    - Si p-valor < {alpha}: Rechazamos H₀ (hay diferencia significativa)
+                    - Si p-valor ≥ {alpha}: No rechazamos H₀ (no hay evidencia de diferencia)
+                    """)
+
+                test_results = StatHypothesisTest.execute_statistical_test(
+                    g1_transformed, g2_transformed,
+                    normalidad_positiva=1 if is_normal else 0,
+                    homogeneidad_positiva=1 if is_homogeneous else 0,
+                    transformacion=transformation,
+                    params=norm_params,
+                    alpha=alpha,
+                    plot=show_plots
+                )
+
+                # ═══════════════════════════════════════
+                # RESULTADOS FINALES
+                # ═══════════════════════════════════════
+                st.markdown("---")
+                st.markdown("## 🎯 Resultados Finales")
+
+                # Decisión estadística
+                is_significant = test_results['p_value'] < alpha
+
+                if is_significant:
+                    st.success(f"""
+                    ### ✅ Diferencia Estadísticamente Significativa
+
+                    **Conclusión:** Existe evidencia suficiente para afirmar que hay una diferencia 
+                    significativa en {selected_variable} entre Transecto {transect1} y Transecto {transect2}.
+
+                    **p-valor:** {test_results['p_value']:.6f} < {alpha}
+                    """)
+                else:
+                    st.warning(f"""
+                    ### ❌ Sin Diferencia Estadísticamente Significativa
+
+                    **Conclusión:** No hay evidencia suficiente para afirmar que existe una diferencia 
+                    en {selected_variable} entre Transecto {transect1} y Transecto {transect2}.
+
+                    **p-valor:** {test_results['p_value']:.6f} ≥ {alpha}
+                    """)
+
+                # Tabla de resultados
+                st.markdown("---")
+                st.markdown("### 📋 Resumen de Estadísticos")
+
+                results_df = pd.DataFrame({
+                    'Métrica': [
+                        'Estadístico de Prueba',
+                        'p-valor',
+                        'Hodges-Lehmann',
+                        'IC 95% (inferior)',
+                        'IC 95% (superior)',
+                        "Cohen's d",
+                        "Rosenthal's r"
+                    ],
+                    'Valor': [
+                        f"{test_results['stat']:.4f}",
+                        f"{test_results['p_value']:.6f}",
+                        f"{test_results['hodges_lehmann']:.4f}",
+                        f"{test_results['hl_confidence_interval'][0]:.4f}",
+                        f"{test_results['hl_confidence_interval'][1]:.4f}",
+                        f"{test_results['cohens_d']:.4f}",
+                        f"{test_results['rosenthal_r']:.4f}"
+                    ],
+                    'Interpretación': [
+                        f"Valor del test {test_name}",
+                        "Significativo" if is_significant else "No significativo",
+                        "Diferencia mediana estimada",
+                        "Límite inferior del IC",
+                        "Límite superior del IC",
+                        StatHypothesisTest._interpret_cohens_d(test_results['cohens_d']),
+                        StatHypothesisTest._interpret_rosenthal_r(test_results['rosenthal_r'])
+                    ]
+                })
+
+                st.dataframe(results_df, use_container_width=True, hide_index=True)
+
+                # Interpretación de tamaños de efecto
+                st.markdown("---")
+                st.markdown("### 📏 Tamaños de Efecto")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    cohens_interpretation = StatHypothesisTest._interpret_cohens_d(test_results['cohens_d'])
+                    st.metric(
+                        "Cohen's d",
+                        f"{test_results['cohens_d']:.3f}",
+                        cohens_interpretation
+                    )
+                    st.caption("Mide la diferencia estandarizada entre medias")
+
+                with col2:
+                    rosenthal_interpretation = StatHypothesisTest._interpret_rosenthal_r(test_results['rosenthal_r'])
+                    st.metric(
+                        "Rosenthal's r",
+                        f"{test_results['rosenthal_r']:.3f}",
+                        rosenthal_interpretation
+                    )
+                    st.caption("Correlación entre grupo y variable")
+
+                # Exportar resultados
+                st.markdown("---")
+                st.markdown("### 📥 Exportar Resultados")
+
+                export_data = {
+                    'Variable': selected_variable,
+                    'Transecto_1': transect1,
+                    'Transecto_2': transect2,
+                    'N_Transecto_1': len(group1),
+                    'N_Transecto_2': len(group2),
+                    'Media_Transecto_1': group1.mean(),
+                    'Media_Transecto_2': group2.mean(),
+                    'Transformacion': transformation,
+                    'Normalidad': 'Sí' if is_normal else 'No',
+                    'Homogeneidad': 'Sí' if is_homogeneous else 'No',
+                    'Prueba_Utilizada': test_name,
+                    'Estadistico': test_results['stat'],
+                    'p_valor': test_results['p_value'],
+                    'Significativo': 'Sí' if is_significant else 'No',
+                    'Hodges_Lehmann': test_results['hodges_lehmann'],
+                    'IC_95_inferior': test_results['hl_confidence_interval'][0],
+                    'IC_95_superior': test_results['hl_confidence_interval'][1],
+                    'Cohens_d': test_results['cohens_d'],
+                    'Rosenthal_r': test_results['rosenthal_r'],
+                    'Alpha': alpha
+                }
+
+                export_df = pd.DataFrame([export_data])
+                csv = export_df.to_csv(index=False)
+
+                st.download_button(
+                    label="📥 Descargar Resultados (CSV)",
+                    data=csv,
+                    file_name=f"prueba_hipotesis_{selected_variable}_{transect1}_vs_{transect2}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+                st.success("✅ Análisis completado exitosamente!")
+
+    # ═══════════════════════════════════════════════════════════
+    # MÉTODOS AUXILIARES
+    # ═══════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _interpret_cohens_d(d):
+        """Interpreta el tamaño de efecto de Cohen's d"""
+        abs_d = abs(d)
+        if abs_d < 0.2:
+            return "Muy pequeño"
+        elif abs_d < 0.5:
+            return "Pequeño"
+        elif abs_d < 0.8:
+            return "Mediano"
+        else:
+            return "Grande"
+
+    @staticmethod
+    def _interpret_rosenthal_r(r):
+        """Interpreta el tamaño de efecto de Rosenthal's r"""
+        abs_r = abs(r)
+        if abs_r < 0.1:
+            return "Muy pequeño"
+        elif abs_r < 0.3:
+            return "Pequeño"
+        elif abs_r < 0.5:
+            return "Mediano"
+        else:
+            return "Grande"
+
     @staticmethod
     def get_transect_groups(df, question_col):
         transect_groups = {
@@ -2045,258 +2770,216 @@ class StatHypothesisTest:
 
     @staticmethod
     def analize_distribution_normality(group1, group2, alpha=0.05, plot=True):
-        print("Normality test search")
-        print("=" * 55)
+        """Análisis de normalidad con transformaciones"""
 
-        # Original Data analysis
-        print("\n1. Default data analysis:")
+        # Contenedor para logs
+        with st.expander("📝 Log Detallado de Normalidad", expanded=False):
+            log_container = st.empty()
+            logs = []
 
-        _, p1_orig = normaltest(group1)
-        _, p2_orig = normaltest(group2)
-        normal1_orig = p1_orig > alpha
-        normal2_orig = p2_orig > alpha
+            def add_log(message):
+                logs.append(message)
+                log_container.code('\n'.join(logs))
 
-        print(f"   Group 1: p={p1_orig:.6f} {'✅' if normal1_orig else '❌'}")
-        print(f"   Group 2: p={p2_orig:.6f} {'✅' if normal2_orig else '❌'}")
+            add_log("=" * 55)
+            add_log("BÚSQUEDA DE NORMALIDAD")
+            add_log("=" * 55)
 
-        if normal1_orig and normal2_orig:
-            print("Both groups fulfill normality - Default values 😄")
+            # 1. Datos originales
+            add_log("\n1. Análisis de datos originales:")
+            _, p1_orig = normaltest(group1)
+            _, p2_orig = normaltest(group2)
+            normal1_orig = p1_orig > alpha
+            normal2_orig = p2_orig > alpha
+
+            add_log(f"   Grupo 1: p={p1_orig:.6f} {'✅' if normal1_orig else '❌'}")
+            add_log(f"   Grupo 2: p={p2_orig:.6f} {'✅' if normal2_orig else '❌'}")
+
+            if normal1_orig and normal2_orig:
+                add_log("\n✅ Ambos grupos cumplen normalidad - Datos originales")
+                if plot:
+                    StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
+                    all_results = {'Original': (p1_orig, p2_orig, True)}
+                    StatHypothesisTest._plot_normality_summary(all_results, alpha)
+                return group1, group2, "original", {"p1": p1_orig, "p2": p2_orig}, True
+
+            # 2. Transformación logarítmica
+            add_log("\n2. Transformación logarítmica:")
+            try:
+                min_val = min(np.min(group1), np.min(group2))
+                if min_val <= 0:
+                    shift = abs(min_val) + 1
+                    g1_log = np.log(group1 + shift)
+                    g2_log = np.log(group2 + shift)
+                    add_log(f"   Constante añadida: +{shift} (para evitar log ≤ 0)")
+                else:
+                    g1_log = np.log(group1)
+                    g2_log = np.log(group2)
+                    shift = 0
+
+                _, p1_log = normaltest(g1_log)
+                _, p2_log = normaltest(g2_log)
+                normal1_log = p1_log > alpha
+                normal2_log = p2_log > alpha
+
+                add_log(f"   Grupo 1: p={p1_log:.6f} {'✅' if normal1_log else '❌'}")
+                add_log(f"   Grupo 2: p={p2_log:.6f} {'✅' if normal2_log else '❌'}")
+
+                if normal1_log and normal2_log:
+                    add_log("\n✅ Ambos grupos cumplen normalidad - Transformación logarítmica")
+                    if plot:
+                        StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
+                        all_results = {
+                            'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
+                            'Log': (p1_log, p2_log, True)
+                        }
+                        StatHypothesisTest._plot_normality_summary(all_results, alpha)
+                    return g1_log, g2_log, "log", {"p1": p1_log, "p2": p2_log, "shift": shift}, True
+
+            except Exception as e:
+                add_log(f"   Error en transformación logarítmica: {e}")
+                p1_log, p2_log = np.nan, np.nan
+
+            # 3. Transformación raíz cuadrada
+            add_log("\n3. Transformación raíz cuadrada:")
+            try:
+                min_val = min(np.min(group1), np.min(group2))
+                if min_val < 0:
+                    shift = abs(min_val)
+                    g1_sqrt = np.sqrt(group1 + shift)
+                    g2_sqrt = np.sqrt(group2 + shift)
+                    add_log(f"   Constante añadida: +{shift} (para evitar √negativo)")
+                else:
+                    g1_sqrt = np.sqrt(group1)
+                    g2_sqrt = np.sqrt(group2)
+                    shift = 0
+
+                _, p1_sqrt = normaltest(g1_sqrt)
+                _, p2_sqrt = normaltest(g2_sqrt)
+                normal1_sqrt = p1_sqrt > alpha
+                normal2_sqrt = p2_sqrt > alpha
+
+                add_log(f"   Grupo 1: p={p1_sqrt:.6f} {'✅' if normal1_sqrt else '❌'}")
+                add_log(f"   Grupo 2: p={p2_sqrt:.6f} {'✅' if normal2_sqrt else '❌'}")
+
+                if normal1_sqrt and normal2_sqrt:
+                    add_log("\n✅ Ambos grupos cumplen normalidad - Transformación raíz cuadrada")
+                    if plot:
+                        StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
+                        all_results = {
+                            'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
+                            'Log': (p1_log if not np.isnan(p1_log) else 0, p2_log if not np.isnan(p2_log) else 0,
+                                    not np.isnan(p1_log) and not np.isnan(
+                                        p2_log) and p1_log > alpha and p2_log > alpha),
+                            'Sqrt': (p1_sqrt, p2_sqrt, True)
+                        }
+                        StatHypothesisTest._plot_normality_summary(all_results, alpha)
+                    return g1_sqrt, g2_sqrt, "sqrt", {"p1": p1_sqrt, "p2": p2_sqrt, "shift": shift}, True
+
+            except Exception as e:
+                add_log(f"   Error en transformación raíz cuadrada: {e}")
+                p1_sqrt, p2_sqrt = np.nan, np.nan
+
+            # 4. Transformación Box-Cox
+            add_log("\n4. Transformación Box-Cox:")
+            try:
+                min_val = min(np.min(group1), np.min(group2))
+                if min_val <= 0:
+                    shift = abs(min_val) + 0.1
+                    g1_shifted = group1 + shift
+                    g2_shifted = group2 + shift
+                    add_log(f"   Constante añadida: +{shift} (Box-Cox requiere valores > 0)")
+                else:
+                    g1_shifted = group1
+                    g2_shifted = group2
+                    shift = 0
+
+                g1_boxcox, lambda1 = boxcox(g1_shifted)
+                g2_boxcox, lambda2 = boxcox(g2_shifted)
+
+                add_log(f"   Lambda Grupo 1: {lambda1:.4f}")
+                add_log(f"   Lambda Grupo 2: {lambda2:.4f}")
+
+                _, p1_boxcox = normaltest(g1_boxcox)
+                _, p2_boxcox = normaltest(g2_boxcox)
+                normal1_boxcox = p1_boxcox > alpha
+                normal2_boxcox = p2_boxcox > alpha
+
+                add_log(f"   Grupo 1: p={p1_boxcox:.6f} {'✅' if normal1_boxcox else '❌'}")
+                add_log(f"   Grupo 2: p={p2_boxcox:.6f} {'✅' if normal2_boxcox else '❌'}")
+
+                if normal1_boxcox and normal2_boxcox:
+                    add_log("\n✅ Ambos grupos cumplen normalidad - Transformación Box-Cox")
+                    if plot:
+                        StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
+                        all_results = {
+                            'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
+                            'Log': (p1_log if not np.isnan(p1_log) else 0, p2_log if not np.isnan(p2_log) else 0,
+                                    not np.isnan(p1_log) and not np.isnan(
+                                        p2_log) and p1_log > alpha and p2_log > alpha),
+                            'Sqrt': (p1_sqrt if not np.isnan(p1_sqrt) else 0, p2_sqrt if not np.isnan(p2_sqrt) else 0,
+                                     not np.isnan(p1_sqrt) and not np.isnan(
+                                         p2_sqrt) and p1_sqrt > alpha and p2_sqrt > alpha),
+                            'Box-Cox': (p1_boxcox, p2_boxcox, True)
+                        }
+                        StatHypothesisTest._plot_normality_summary(all_results, alpha)
+                    return g1_boxcox, g2_boxcox, "boxcox", {
+                        "p1": p1_boxcox, "p2": p2_boxcox,
+                        "lambda1": lambda1, "lambda2": lambda2, "shift": shift
+                    }, True
+
+            except Exception as e:
+                add_log(f"   Error en transformación Box-Cox: {e}")
+                p1_boxcox, p2_boxcox = np.nan, np.nan
+
+            # Ninguna transformación válida
+            add_log("\n❌ Ninguna transformación logró normalidad")
+            add_log("\nResumen:")
+            add_log(f"   Original:  G1={'✅' if normal1_orig else '❌'} G2={'✅' if normal2_orig else '❌'}")
+            add_log(
+                f"   Log:       G1={'✅' if not np.isnan(p1_log) and p1_log > alpha else '❌'} G2={'✅' if not np.isnan(p2_log) and p2_log > alpha else '❌'}")
+            add_log(
+                f"   Sqrt:      G1={'✅' if not np.isnan(p1_sqrt) and p1_sqrt > alpha else '❌'} G2={'✅' if not np.isnan(p2_sqrt) and p2_sqrt > alpha else '❌'}")
+            add_log(
+                f"   Box-Cox:   G1={'✅' if not np.isnan(p1_boxcox) and p1_boxcox > alpha else '❌'} G2={'✅' if not np.isnan(p2_boxcox) and p2_boxcox > alpha else '❌'}")
+            add_log("\n➡️ Se usarán datos originales con Mann-Whitney U")
+
             if plot:
-                # Show plots for all transformations attempted
                 StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
-                # Show summary
                 all_results = {
-                    'Original': (p1_orig, p2_orig, True)
+                    'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
+                    'Log': (p1_log if not np.isnan(p1_log) else 0, p2_log if not np.isnan(p2_log) else 0,
+                            not np.isnan(p1_log) and not np.isnan(p2_log) and p1_log > alpha and p2_log > alpha),
+                    'Sqrt': (p1_sqrt if not np.isnan(p1_sqrt) else 0, p2_sqrt if not np.isnan(p2_sqrt) else 0,
+                             not np.isnan(p1_sqrt) and not np.isnan(p2_sqrt) and p1_sqrt > alpha and p2_sqrt > alpha),
+                    'Box-Cox': (p1_boxcox if not np.isnan(p1_boxcox) else 0,
+                                p2_boxcox if not np.isnan(p2_boxcox) else 0,
+                                not np.isnan(p1_boxcox) and not np.isnan(
+                                    p2_boxcox) and p1_boxcox > alpha and p2_boxcox > alpha)
                 }
                 StatHypothesisTest._plot_normality_summary(all_results, alpha)
-            return group1, group2, "original", {"p1": p1_orig, "p2": p2_orig}, True
-
-        # Logarithmic transformation Data Analysis
-        print("\n2. Log transformed data:")
-
-        try:
-            min_val = min(np.min(group1), np.min(group2))
-            if min_val <= 0:
-                shift = abs(min_val) + 1
-                g1_log = np.log(group1 + shift)
-                g2_log = np.log(group2 + shift)
-                print(f"   Added constant +{shift} to avoid log values <= 0 (Fulfill logarithmic nature) 🔧")
-            else:
-                g1_log = np.log(group1)
-                g2_log = np.log(group2)
-                shift = 0
-
-            _, p1_log = normaltest(g1_log)
-            _, p2_log = normaltest(g2_log)
-            normal1_log = p1_log > alpha
-            normal2_log = p2_log > alpha
-
-            print(f"   Group 1: p={p1_log:.6f} {'✅' if normal1_log else '❌'}")
-            print(f"   Group 2: p={p2_log:.6f} {'✅' if normal2_log else '❌'}")
-
-            if normal1_log and normal2_log:
-                print("Both groups fulfill normality - Logarithmic values 😄")
-                if plot:
-                    # Show plots for all transformations attempted so far
-                    StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
-                    # Show summary
-                    all_results = {
-                        'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
-                        'Log': (p1_log, p2_log, True)
-                    }
-                    StatHypothesisTest._plot_normality_summary(all_results, alpha)
-                return g1_log, g2_log, "log", {"p1": p1_log, "p2": p2_log, "shift": shift}, True
-
-        except Exception as e:
-            print(f"Error in logarithmic transformation: {e} ⚠️")
-            p1_log, p2_log = np.nan, np.nan
-
-        # 3. Square root transformation analysis
-        print("\n3. Square root transformed data:")
-
-        try:
-            # Handle negative values
-            min_val = min(np.min(group1), np.min(group2))
-            if min_val < 0:
-                shift = abs(min_val)
-                g1_sqrt = np.sqrt(group1 + shift)
-                g2_sqrt = np.sqrt(group2 + shift)
-                print(f"   Added constant +{shift} (To avoid square root negative values) 🔧")
-            else:
-                g1_sqrt = np.sqrt(group1)
-                g2_sqrt = np.sqrt(group2)
-                shift = 0
-
-            _, p1_sqrt = normaltest(g1_sqrt)
-            _, p2_sqrt = normaltest(g2_sqrt)
-            normal1_sqrt = p1_sqrt > alpha
-            normal2_sqrt = p2_sqrt > alpha
-
-            print(f"   Group 1: p={p1_sqrt:.6f} {'✅' if normal1_sqrt else '❌'}")
-            print(f"   Group 2: p={p2_sqrt:.6f} {'✅' if normal2_sqrt else '❌'}")
-
-            if normal1_sqrt and normal2_sqrt:
-                print("Both groups fulfill normality - Square root values 😄")
-                if plot:
-                    # Show plots for all transformations attempted so far
-                    StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
-                    # Show summary
-                    all_results = {
-                        'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
-                        'Log': (p1_log if not np.isnan(p1_log) else 0, p2_log if not np.isnan(p2_log) else 0,
-                                not np.isnan(p1_log) and not np.isnan(p2_log) and p1_log > alpha and p2_log > alpha),
-                        'Sqrt': (p1_sqrt, p2_sqrt, True)
-                    }
-                    StatHypothesisTest._plot_normality_summary(all_results, alpha)
-                return g1_sqrt, g2_sqrt, "sqrt", {"p1": p1_sqrt, "p2": p2_sqrt, "shift": shift}, True
-
-        except Exception as e:
-            print(f"Error in square root transformation: {e} ⚠️")
-            p1_sqrt, p2_sqrt = np.nan, np.nan
-
-        # Box-Cox transformation analysis
-        print("\n4. Box-Cox transformed data:")
-
-        try:
-            # Box-Cox requires values > 0
-            min_val = min(np.min(group1), np.min(group2))
-            if min_val <= 0:
-                shift = abs(min_val) + 0.1
-                g1_shifted = group1 + shift
-                g2_shifted = group2 + shift
-                print(f"   Added constant +{shift} (Fulfill Box-Cox transformation nature) 🔧")
-            else:
-                g1_shifted = group1
-                g2_shifted = group2
-                shift = 0
-
-            g1_boxcox, lambda1 = boxcox(g1_shifted)
-            g2_boxcox, lambda2 = boxcox(g2_shifted)
-
-            print(f"   Lambda Group 1: {lambda1:.4f} 🔢")
-            print(f"   Lambda Group 2: {lambda2:.4f} 🔢")
-
-            _, p1_boxcox = normaltest(g1_boxcox)
-            _, p2_boxcox = normaltest(g2_boxcox)
-            normal1_boxcox = p1_boxcox > alpha
-            normal2_boxcox = p2_boxcox > alpha
-
-            print(f"   Group 1: p={p1_boxcox:.6f} {'✅' if normal1_boxcox else '❌'}")
-            print(f"   Group 2: p={p2_boxcox:.6f} {'✅' if normal2_boxcox else '❌'}")
-
-            if normal1_boxcox and normal2_boxcox:
-                print("Both groups fulfill normality - Box-Cox values 😄")
-                if plot:
-                    # Show plots for all transformations attempted so far
-                    StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
-                    # Show summary
-                    all_results = {
-                        'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
-                        'Log': (p1_log if not np.isnan(p1_log) else 0, p2_log if not np.isnan(p2_log) else 0,
-                                not np.isnan(p1_log) and not np.isnan(p2_log) and p1_log > alpha and p2_log > alpha),
-                        'Sqrt': (p1_sqrt if not np.isnan(p1_sqrt) else 0, p2_sqrt if not np.isnan(p2_sqrt) else 0,
-                                 not np.isnan(p1_sqrt) and not np.isnan(
-                                     p2_sqrt) and p1_sqrt > alpha and p2_sqrt > alpha),
-                        'Box-Cox': (p1_boxcox, p2_boxcox, True)
-                    }
-                    StatHypothesisTest._plot_normality_summary(all_results, alpha)
-                return g1_boxcox, g2_boxcox, "boxcox", {
-                    "p1": p1_boxcox, "p2": p2_boxcox,
-                    "lambda1": lambda1, "lambda2": lambda2, "shift": shift
-                }, True
-
-        except Exception as e:
-            print(f"Error in Box-Cox transformation: {e} ⚠️")
-            p1_boxcox, p2_boxcox = np.nan, np.nan
-
-        # No transformation is valid
-        print(f"\nNo transformation is valid for normality test ❌")
-        print(f"Summary:")
-        print(f"   Original: G1={'✅' if normal1_orig else '❌'} G2={'✅' if normal2_orig else '❌'}")
-        print(
-            f"   Log:      G1={'✅' if not np.isnan(p1_log) and p1_log > alpha else '❌'} G2={'✅' if not np.isnan(p2_log) and p2_log > alpha else '❌'}")
-        print(
-            f"   Sqrt:     G1={'✅' if not np.isnan(p1_sqrt) and p1_sqrt > alpha else '❌'} G2={'✅' if not np.isnan(p2_sqrt) and p2_sqrt > alpha else '❌'}")
-        print(
-            f"   Box-Cox:  G1={'✅' if not np.isnan(p1_boxcox) and p1_boxcox > alpha else '❌'} G2={'✅' if not np.isnan(p2_boxcox) and p2_boxcox > alpha else '❌'}")
-        print(f"\n➡️  Use original data with Mann-Whitney U")
-
-        # Show summary of all transformations tried
-        if plot:
-            # Show plots for all transformations attempted
-            StatHypothesisTest._plot_all_normality_tests(group1, group2, alpha)
-            # Show final summary
-            all_results = {
-                'Original': (p1_orig, p2_orig, normal1_orig and normal2_orig),
-                'Log': (p1_log if not np.isnan(p1_log) else 0, p2_log if not np.isnan(p2_log) else 0,
-                        not np.isnan(p1_log) and not np.isnan(p2_log) and p1_log > alpha and p2_log > alpha),
-                'Sqrt': (p1_sqrt if not np.isnan(p1_sqrt) else 0, p2_sqrt if not np.isnan(p2_sqrt) else 0,
-                         not np.isnan(p1_sqrt) and not np.isnan(p2_sqrt) and p1_sqrt > alpha and p2_sqrt > alpha),
-                'Box-Cox': (p1_boxcox if not np.isnan(p1_boxcox) else 0, p2_boxcox if not np.isnan(p2_boxcox) else 0,
-                            not np.isnan(p1_boxcox) and not np.isnan(
-                                p2_boxcox) and p1_boxcox > alpha and p2_boxcox > alpha)
-            }
-            StatHypothesisTest._plot_normality_summary(all_results, alpha)
 
         return group1, group2, "original", {"p1": p1_orig, "p2": p2_orig}, False
 
     @staticmethod
     def analize_distributions_homogeneity(group1, group2, alpha=0.05, plot=True):
-        print("Homogeneity between variances verification")
-        print("=" * 55)
+        """Análisis de homogeneidad de varianzas"""
 
-        # Levene Test
         stat_levene, p_levene = levene(group1, group2)
         homogeneous = p_levene > alpha
 
-        print(f"Levene's Test:")
-        print(f"   Statistic: {stat_levene:.4f} 📊")
-        print(f"   p-value: {p_levene:.6f} 📈")
-        print(f"   Result: {'✅ Homogeneous variances' if homogeneous else '❌ Heterogeneous variances'}")
-
-        # Plot variance comparison
         if plot:
             StatHypothesisTest._plot_variance_homogeneity(group1, group2, stat_levene, p_levene, homogeneous)
 
         return stat_levene, p_levene, homogeneous
 
     @staticmethod
-    def _plot_variance_homogeneity(group1, group2, stat_levene, p_levene, homogeneous):
-        """Boxplot comparison for variance homogeneity"""
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        # Create boxplots
-        bp = plt.boxplot([group1, group2], labels=['Group 1', 'Group 2'], patch_artist=True)
-        bp['boxes'][0].set_facecolor('lightblue')
-        bp['boxes'][1].set_facecolor('lightcoral')
-        bp['boxes'][0].set_alpha(0.7)
-        bp['boxes'][1].set_alpha(0.7)
-
-        # Add variance annotations
-        var1, var2 = np.var(group1, ddof=1), np.var(group2, ddof=1)
-        max1, max2 = np.max(group1), np.max(group2)
-
-        plt.text(1, max1 + (max1 - np.min(group1)) * 0.05, f'Var: {var1:.3f}',
-                 ha='center', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-        plt.text(2, max2 + (max2 - np.min(group2)) * 0.05, f'Var: {var2:.3f}',
-                 ha='center', bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.8))
-
-        # Levene test result
-        result_text = f"Levene's Test\nStatistic: {stat_levene:.4f}\np-value: {p_levene:.6f}\n{'✅ Homogeneous' if homogeneous else '❌ Heterogeneous'}"
-        plt.text(1.5, plt.ylim()[1] * 0.9, result_text, ha='center', va='top',
-                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black'))
-
-        plt.title('Variance Homogeneity Test', fontsize=14, fontweight='bold')
-        plt.ylabel('Values')
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        st.pyplot(fig)
-
-    @staticmethod
     def execute_statistical_test(group1, group2, normalidad_positiva, homogeneidad_positiva, transformacion, params,
                                  alpha=0.05, plot=True):
+        """Ejecuta la prueba estadística apropiada y calcula métricas"""
 
         def inverse_transform(data, transform_type, params, group_num=1):
+            """Revierte la transformación aplicada"""
             if transform_type == "original":
                 return data
 
@@ -2309,16 +2992,13 @@ class StatHypothesisTest:
                 return data ** 2 - shift
 
             elif transform_type == "boxcox":
-                # For Box-Cox, each group can have different lambda
                 lambda_key = f"lambda{group_num}"
                 lambda_val = params[lambda_key]
                 shift = params.get("shift", 0)
 
                 if lambda_val == 0:
-                    # Special case: logarithmic transformation
                     original = np.exp(data)
                 else:
-                    # General case: y = (x^λ - 1) / λ  =>  x = (λ*y + 1)^(1/λ)
                     original = np.power(lambda_val * data + 1, 1 / lambda_val)
 
                 return original - shift
@@ -2327,44 +3007,43 @@ class StatHypothesisTest:
                 raise ValueError(f"Unknown transformation type: {transform_type}")
 
         def statistical_difference_significance(group1, group2, normalidad_positiva, homogeneidad_positiva):
-            if normalidad_positiva == 0 and (
-                    homogeneidad_positiva == 0 or homogeneidad_positiva == 1):  # Mann-Whitney U
-                stat, p_val = mannwhitneyu(group1, group2, alternative='two-sided')
-                is_sig = p_val < alpha
-                print(f"Mann-Whitney U Test:")
-                print(f"   U-statistic: {stat:.4f} 📊")
-                print(f"   p-value: {p_val:.6f} 📈")
-                if is_sig == False:
-                    print("   The difference is not significant ❌")
-                elif is_sig == True:
-                    print("   The difference is significant ✅")
-                return stat, p_val
+            """Ejecuta la prueba estadística apropiada"""
 
-            elif normalidad_positiva == 1 and homogeneidad_positiva == 1:  # Independent t-test
-                stat, p_val = ttest_ind(group1, group2)
-                is_sig = p_val < alpha
-                print(f"Independent t-test:")
-                print(f"   t-statistic: {stat:.4f} 📊")
-                print(f"   p-value: {p_val:.6f} 📈")
-                if is_sig == False:
-                    print("   The difference is not significant ❌")
-                elif is_sig == True:
-                    print("   The difference is significant ✅")
-                return stat, p_val
+            with st.expander("📝 Log de Prueba Estadística", expanded=False):
+                if normalidad_positiva == 0:
+                    stat, p_val = mannwhitneyu(group1, group2, alternative='two-sided')
+                    is_sig = p_val < alpha
+                    st.code(f"""
+Mann-Whitney U Test:
+   U-statistic: {stat:.4f}
+   p-value: {p_val:.6f}
+   Resultado: {'✅ Diferencia significativa' if is_sig else '❌ Sin diferencia significativa'}
+                    """)
+                    return stat, p_val
 
-            elif normalidad_positiva == 1 and homogeneidad_positiva == 0:  # Welch's t-test
-                stat, p_val = ttest_ind(group1, group2, equal_var=False)
-                is_sig = p_val < alpha
-                print(f"Welch's t-test:")
-                print(f"   t-statistic: {stat:.4f} 📊")
-                print(f"   p-value: {p_val:.6f} 📈")
-                if is_sig == False:
-                    print("   The difference is not significant ❌")
-                elif is_sig == True:
-                    print("   The difference is significant ✅")
-                return stat, p_val
+                elif normalidad_positiva == 1 and homogeneidad_positiva == 1:
+                    stat, p_val = ttest_ind(group1, group2)
+                    is_sig = p_val < alpha
+                    st.code(f"""
+Independent t-test:
+   t-statistic: {stat:.4f}
+   p-value: {p_val:.6f}
+   Resultado: {'✅ Diferencia significativa' if is_sig else '❌ Sin diferencia significativa'}
+                    """)
+                    return stat, p_val
 
-        # Execute statistical test
+                elif normalidad_positiva == 1 and homogeneidad_positiva == 0:
+                    stat, p_val = ttest_ind(group1, group2, equal_var=False)
+                    is_sig = p_val < alpha
+                    st.code(f"""
+Welch's t-test:
+   t-statistic: {stat:.4f}
+   p-value: {p_val:.6f}
+   Resultado: {'✅ Diferencia significativa' if is_sig else '❌ Sin diferencia significativa'}
+                    """)
+                    return stat, p_val
+
+        # Ejecutar prueba estadística
         stat, p_val = statistical_difference_significance(group1, group2, normalidad_positiva, homogeneidad_positiva)
 
         # Plot p-value distribution
@@ -2372,9 +3051,10 @@ class StatHypothesisTest:
             test_type = StatHypothesisTest._determine_test_type(normalidad_positiva, homogeneidad_positiva)
             StatHypothesisTest._plot_pvalue_distribution(stat, p_val, test_type, alpha, len(group1), len(group2))
 
-        # Return to original scale
+        # Revertir a escala original
         if transformacion != "original":
-            print(f"\n🔄 Reverting '{transformacion}' transformation to calculate metrics in original scale...")
+            with st.expander("🔄 Reversión de Transformación", expanded=False):
+                st.info(f"Revirtiendo transformación '{transformacion}' para calcular métricas en escala original...")
             group1_original = inverse_transform(group1, transformacion, params, group_num=1)
             group2_original = inverse_transform(group2, transformacion, params, group_num=2)
         else:
@@ -2382,18 +3062,18 @@ class StatHypothesisTest:
             group2_original = group2
 
         def measure_difference(group1, group2):
-            """Difference estimator (Hodges-Lehmann)"""
+            """Estimador de diferencia (Hodges-Lehmann)"""
 
             def hodges_lehmann(group1, group2):
                 x = np.asarray(group1)
                 y = np.asarray(group2)
                 m, n = len(x), len(y)
 
-                # 1) Hodges-Lehmann estimator (median of all differences x_i - y_j)
-                pairwise_diffs = np.subtract.outer(x, y).ravel()  # creates m x n matrix and flattens it
+                # Hodges-Lehmann estimator
+                pairwise_diffs = np.subtract.outer(x, y).ravel()
                 hl = np.median(pairwise_diffs)
 
-                # 2) 95% CI by bootstrap (percentile bootstrap)
+                # 95% CI por bootstrap
                 rng = np.random.default_rng(12345)
                 n_boot = 5000
                 boots = np.empty(n_boot)
@@ -2402,43 +3082,47 @@ class StatHypothesisTest:
                     by = rng.choice(y, size=n, replace=True)
                     boots[i] = np.median(np.subtract.outer(bx, by).ravel())
 
-                alpha = 0.05
-                ci_lower, ci_upper = np.percentile(boots, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+                alpha_ci = 0.05
+                ci_lower, ci_upper = np.percentile(boots, [100 * alpha_ci / 2, 100 * (1 - alpha_ci / 2)])
 
-                print(f"📊 Hodges–Lehmann (original scale) = {hl:.4f}")
-                print(f"📊 Bootstrap 95% CI for HL: [{ci_lower:.4f}, {ci_upper:.4f}]")
+                with st.expander("📊 Hodges-Lehmann (Escala Original)", expanded=False):
+                    st.code(f"""
+Hodges–Lehmann = {hl:.4f}
+Bootstrap 95% CI: [{ci_lower:.4f}, {ci_upper:.4f}]
+                    """)
+
                 return hl, (ci_lower, ci_upper)
 
             return hodges_lehmann(group1, group2)
 
         def measure_effect(group1, group2, stat):
-            """Effect size (Cohen's d, Rosenthal's r)"""
-            # Rosenthal's r
+            """Tamaño de efecto (Cohen's d, Rosenthal's r)"""
             n1, n2 = len(group1), len(group2)
-            df = n1 + n2 - 2  # approximate degrees of freedom
+            df = n1 + n2 - 2
             r_rosenthal = np.sqrt(stat ** 2 / (stat ** 2 + df))
 
-            # Cohen's d
             mean_diff = np.mean(group1) - np.mean(group2)
             s1, s2 = np.var(group1, ddof=1), np.var(group2, ddof=1)
             pooled_std = np.sqrt(((n1 - 1) * s1 + (n2 - 1) * s2) / (n1 + n2 - 2))
             cohens_d = mean_diff / pooled_std
 
-            print(f"📊 Cohen's d (original scale) = {cohens_d:.4f}")
-            print(f"📊 Rosenthal's r = {r_rosenthal:.4f}")
+            with st.expander("📊 Tamaños de Efecto (Escala Original)", expanded=False):
+                st.code(f"""
+Cohen's d = {cohens_d:.4f}
+Rosenthal's r = {r_rosenthal:.4f}
+                """)
 
             return cohens_d, r_rosenthal
 
-        # Calculate metrics in original scale
+        # Calcular métricas en escala original
         hl, hl_ci = measure_difference(group1_original, group2_original)
         cohens_d, r_rosenthal = measure_effect(group1_original, group2_original, stat)
 
-        # Plot effect sizes and Hodges-Lehmann
+        # Plot effect sizes y Hodges-Lehmann
         if plot:
             StatHypothesisTest._plot_effect_sizes(group1_original, group2_original, cohens_d, r_rosenthal)
-            StatHypothesisTest._plot_hodges_lehmann_bootstrap(group1_original, group2_original, hl, hl_ci)
 
-        # Return results
+        # Retornar resultados
         return {
             'stat': stat,
             'p_value': p_val,
@@ -2450,7 +3134,7 @@ class StatHypothesisTest:
 
     @staticmethod
     def _determine_test_type(normalidad_positiva, homogeneidad_positiva):
-        """Determine which test was used"""
+        """Determina qué prueba se usó"""
         if normalidad_positiva == 0:
             return "Mann-Whitney U"
         elif normalidad_positiva == 1 and homogeneidad_positiva == 1:
@@ -2458,13 +3142,46 @@ class StatHypothesisTest:
         elif normalidad_positiva == 1 and homogeneidad_positiva == 0:
             return "Welch's t-test"
 
+    # ═══════════════════════════════════════════════════════════
+    # MÉTODOS DE VISUALIZACIÓN
+    # ═══════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _plot_variance_homogeneity(group1, group2, stat_levene, p_levene, homogeneous):
+        """Boxplot para comparar homogeneidad de varianzas"""
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        bp = plt.boxplot([group1, group2], labels=['Group 1', 'Group 2'], patch_artist=True)
+        bp['boxes'][0].set_facecolor('lightblue')
+        bp['boxes'][1].set_facecolor('lightcoral')
+        bp['boxes'][0].set_alpha(0.7)
+        bp['boxes'][1].set_alpha(0.7)
+
+        var1, var2 = np.var(group1, ddof=1), np.var(group2, ddof=1)
+        max1, max2 = np.max(group1), np.max(group2)
+
+        plt.text(1, max1 + (max1 - np.min(group1)) * 0.05, f'Var: {var1:.3f}',
+                 ha='center', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+        plt.text(2, max2 + (max2 - np.min(group2)) * 0.05, f'Var: {var2:.3f}',
+                 ha='center', bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.8))
+
+        result_text = f"Levene's Test\nStatistic: {stat_levene:.4f}\np-value: {p_levene:.6f}\n{'✅ Homogeneous' if homogeneous else '❌ Heterogeneous'}"
+        plt.text(1.5, plt.ylim()[1] * 0.9, result_text, ha='center', va='top',
+                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black'))
+
+        plt.title('Variance Homogeneity Test', fontsize=14, fontweight='bold')
+        plt.ylabel('Values')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+
     @staticmethod
     def _plot_pvalue_distribution(stat, p_val, test_type, alpha, n1, n2):
-        """Bell curve with p-value for each test"""
-        plt.figure(figsize=(12, 6))
+        """Curva de campana con p-value para cada prueba"""
+        fig = plt.figure(figsize=(12, 6))
 
         if test_type == "Mann-Whitney U":
-            # Para Mann-Whitney, usar distribución normal aproximada
             x = np.linspace(-4, 4, 1000)
             y = norm.pdf(x, 0, 1)
 
@@ -2501,8 +3218,6 @@ class StatHypothesisTest:
             plt.fill_between(x_left, t.pdf(x_left, df), alpha=0.3, color='red')
             plt.fill_between(x_right, t.pdf(x_right, df), alpha=0.3, color='red')
 
-        # -------------------------------
-        # Resultado de significancia
         conclusion = "✅ Diferencia significativa" if p_val < alpha else "❌ No hay Diferencia significativa"
         plt.title(f'{test_type}\np-value = {p_val:.5f}', fontsize=14, fontweight='bold')
         plt.xlabel('Test Statistic')
@@ -2510,21 +3225,20 @@ class StatHypothesisTest:
         plt.legend()
         plt.grid(True, alpha=0.3)
 
-        # Agregar texto de conclusión
         plt.text(0.05, 0.9, conclusion, transform=plt.gca().transAxes,
                  fontsize=12, fontweight='bold', color='green' if p_val < alpha else 'red')
 
         plt.tight_layout()
-        st.pyplot(plt)
+        st.pyplot(fig)
+        plt.close()
 
     @staticmethod
     def _plot_all_normality_tests(group1, group2, alpha):
-        """Plot detailed normality tests for all transformations attempted"""
+        """Plot detallado de pruebas de normalidad para todas las transformaciones intentadas"""
 
-        # Prepare all transformations
         transformations = {}
 
-        # Original data
+        # Original
         stat1_orig, p1_orig = normaltest(group1)
         stat2_orig, p2_orig = normaltest(group2)
         transformations['Original'] = {
@@ -2533,7 +3247,7 @@ class StatHypothesisTest:
             'p1': p1_orig, 'p2': p2_orig
         }
 
-        # Log transformation
+        # Log
         try:
             min_val = min(np.min(group1), np.min(group2))
             if min_val <= 0:
@@ -2554,7 +3268,7 @@ class StatHypothesisTest:
         except:
             transformations['Log'] = None
 
-        # Sqrt transformation
+        # Sqrt
         try:
             min_val = min(np.min(group1), np.min(group2))
             if min_val < 0:
@@ -2575,7 +3289,7 @@ class StatHypothesisTest:
         except:
             transformations['Sqrt'] = None
 
-        # Box-Cox transformation
+        # Box-Cox
         try:
             min_val = min(np.min(group1), np.min(group2))
             if min_val <= 0:
@@ -2599,7 +3313,7 @@ class StatHypothesisTest:
         except:
             transformations['Box-Cox'] = None
 
-        # Create plots for each transformation
+        # Crear plots para cada transformación
         valid_transforms = {k: v for k, v in transformations.items() if v is not None}
         n_transforms = len(valid_transforms)
 
@@ -2607,14 +3321,14 @@ class StatHypothesisTest:
         if n_transforms == 1:
             axes = axes.reshape(1, -1)
 
-        # Chi-square distribution
+        # Distribución Chi-cuadrado
         x = np.linspace(0, 15, 1000)
         y = chi2.pdf(x, df=2)
         chi2_crit = chi2.ppf(1 - alpha, df=2)
         x_reject = x[x >= chi2_crit]
 
         for i, (name, data) in enumerate(valid_transforms.items()):
-            # Group 1 plot
+            # Grupo 1
             axes[i, 0].plot(x, y, 'b-', linewidth=2, label='Chi-square (df=2)')
             axes[i, 0].axvline(data['stat1'], color='red', linewidth=3, label=f'Observed: {data["stat1"]:.3f}')
             axes[i, 0].axvline(chi2_crit, color='red', linestyle='--', alpha=0.7, label=f'Critical: {chi2_crit:.3f}')
@@ -2627,7 +3341,7 @@ class StatHypothesisTest:
             axes[i, 0].legend()
             axes[i, 0].grid(True, alpha=0.3)
 
-            # Group 2 plot
+            # Grupo 2
             axes[i, 1].plot(x, y, 'b-', linewidth=2, label='Chi-square (df=2)')
             axes[i, 1].axvline(data['stat2'], color='red', linewidth=3, label=f'Observed: {data["stat2"]:.3f}')
             axes[i, 1].axvline(chi2_crit, color='red', linestyle='--', alpha=0.7, label=f'Critical: {chi2_crit:.3f}')
@@ -2644,18 +3358,18 @@ class StatHypothesisTest:
                      fontsize=16, fontweight='bold')
         plt.tight_layout()
         st.pyplot(fig)
+        plt.close()
 
     @staticmethod
     def _plot_normality_summary(all_results, alpha):
-        """Summary plot of normality transformations (simplified without success panel)"""
+        """Resumen de transformaciones de normalidad"""
         transformations = list(all_results.keys())
         p_values_g1 = [result[0] for result in all_results.values()]
         p_values_g2 = [result[1] for result in all_results.values()]
         success = [result[2] for result in all_results.values()]
 
-        plt.figure(figsize=(12, 6))
+        fig = plt.figure(figsize=(12, 6))
 
-        # Bar plot of p-values
         x = np.arange(len(transformations))
         width = 0.35
 
@@ -2671,107 +3385,17 @@ class StatHypothesisTest:
         plt.xticks(x, transformations, rotation=45)
         plt.legend()
         plt.grid(True, alpha=0.3)
-
-    @staticmethod
-    def _plot_hodges_lehmann_bootstrap(group1, group2, hl_estimate, hl_ci):
-        """Enhanced Hodges-Lehmann visualization with pairwise differences and dense bootstrap"""
-
-        # Convert to numpy arrays if they're pandas objects
-        group1 = np.asarray(group1)
-        group2 = np.asarray(group2)
-
-        # Calculate all pairwise differences
-        pairwise_diffs = np.subtract.outer(group1, group2).ravel()
-
-        # Generate dense bootstrap distribution
-        rng = np.random.default_rng(12345)
-        n_boot = 10000  # Increased iterations for better visualization
-        m, n = len(group1), len(group2)
-        boots = np.empty(n_boot)
-
-        for i in range(n_boot):
-            bx = rng.choice(group1, size=m, replace=True)
-            by = rng.choice(group2, size=n, replace=True)
-            boots[i] = np.median(np.subtract.outer(bx, by).ravel())
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-
-        # Panel 1: Distribution of all pairwise differences with Hodges-Lehmann marked
-        ax1.hist(pairwise_diffs, bins=50, density=True, alpha=0.7, color='lightblue',
-                 edgecolor='black', label=f'All pairwise differences (n={len(pairwise_diffs)})')
-        ax1.axvline(hl_estimate, color='red', linewidth=3,
-                    label=f'Hodges-Lehmann (median): {hl_estimate:.3f}')
-        ax1.axvline(np.mean(pairwise_diffs), color='orange', linewidth=2, linestyle='--',
-                    label=f'Mean difference: {np.mean(pairwise_diffs):.3f}')
-
-        # Add normal distribution overlay for comparison
-        diff_mean, diff_std = np.mean(pairwise_diffs), np.std(pairwise_diffs)
-        x_norm = np.linspace(np.min(pairwise_diffs), np.max(pairwise_diffs), 1000)
-        y_norm = norm.pdf(x_norm, diff_mean, diff_std)
-        ax1.plot(x_norm, y_norm, 'k--', alpha=0.5, label='Normal approximation')
-
-        ax1.set_xlabel('Pairwise Differences (Group1 - Group2)')
-        ax1.set_ylabel('Density')
-        ax1.set_title('Distribution of All Pairwise Differences\n(xi - yj for all i,j pairs)')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # Panel 2: Dense bootstrap distribution with comparison to theoretical
-        ax2.hist(boots, bins=80, density=True, alpha=0.7, color='lightgreen',
-                 edgecolor='black', label=f'Bootstrap distribution (n={n_boot})')
-        ax2.axvline(hl_estimate, color='red', linewidth=3,
-                    label=f'Original H-L: {hl_estimate:.3f}')
-        ax2.axvline(hl_ci[0], color='orange', linestyle='--', linewidth=2,
-                    label=f'95% CI: [{hl_ci[0]:.3f}, {hl_ci[1]:.3f}]')
-        ax2.axvline(hl_ci[1], color='orange', linestyle='--', linewidth=2)
-
-        # Fill CI area
-        y_max = ax2.get_ylim()[1]
-        ax2.fill_betweenx([0, y_max], hl_ci[0], hl_ci[1], alpha=0.2, color='orange')
-
-        # Add theoretical normal approximation of bootstrap
-        boot_mean, boot_std = np.mean(boots), np.std(boots)
-        x_boot_norm = np.linspace(np.min(boots), np.max(boots), 1000)
-        y_boot_norm = norm.pdf(x_boot_norm, boot_mean, boot_std)
-        ax2.plot(x_boot_norm, y_boot_norm, 'k--', alpha=0.8, linewidth=2,
-                 label='Normal approximation')
-
-        ax2.set_xlabel('Hodges-Lehmann Estimator')
-        ax2.set_ylabel('Density')
-        ax2.set_title(f'Bootstrap Distribution of H-L Estimator\n(Enhanced with {n_boot:,} iterations)')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-
-        # Add interpretation box
-        if hl_ci[0] > 0:
-            interpretation = "Significant positive difference"
-            interpretation_detail = f"Group 1 > Group 2 (p < 0.05)"
-            color = 'green'
-        elif hl_ci[1] < 0:
-            interpretation = "Significant negative difference"
-            interpretation_detail = f"Group 1 < Group 2 (p < 0.05)"
-            color = 'green'
-        else:
-            interpretation = "No significant difference"
-            interpretation_detail = f"CI includes 0 (p ≥ 0.05)"
-            color = 'red'
-
-        # Add interpretation text box
-        textstr = f'{interpretation}\n{interpretation_detail}\nCI width: {hl_ci[1] - hl_ci[0]:.3f}'
-        props = dict(boxstyle='round', facecolor=color, alpha=0.1, edgecolor=color)
-        ax2.text(0.95, 0.95, textstr, transform=ax2.transAxes, fontsize=10, fontweight='bold',
-                 verticalalignment='top', horizontalalignment='right', bbox=props, color=color)
-
-        plt.suptitle('Hodges-Lehmann Estimator Analysis', fontsize=16, fontweight='bold')
         plt.tight_layout()
         st.pyplot(fig)
+        plt.close()
+
 
     @staticmethod
     def _plot_effect_sizes(group1, group2, cohens_d, r_rosenthal):
-        """Overlapping distributions for Cohen's d and Rosenthal's r"""
+        """Distribuciones superpuestas para Cohen's d y Rosenthal's r"""
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
-        # Cohen's d visualization
+        # Cohen's d
         mean1, mean2 = np.mean(group1), np.mean(group2)
         std_pooled = np.sqrt((np.var(group1, ddof=1) + np.var(group2, ddof=1)) / 2)
 
@@ -2784,10 +3408,8 @@ class StatHypothesisTest:
         ax1.fill_between(x, y1, alpha=0.3, color='blue')
         ax1.fill_between(x, y2, alpha=0.3, color='red')
 
-        # Calculate overlap
         overlap = 2 * norm.cdf(-abs(cohens_d) / 2)
 
-        # Effect size interpretation
         if abs(cohens_d) < 0.2:
             effect_size = "Very small"
         elif abs(cohens_d) < 0.5:
@@ -2803,8 +3425,7 @@ class StatHypothesisTest:
         ax1.legend()
         ax1.grid(True, alpha=0.3)
 
-        # Rosenthal's r visualization
-        # Convert r to Cohen's d equivalent for visualization: d = 2r/sqrt(1-r²)
+        # Rosenthal's r
         if abs(r_rosenthal) < 1:
             d_equivalent = 2 * r_rosenthal / np.sqrt(1 - r_rosenthal ** 2)
         else:
@@ -2819,7 +3440,6 @@ class StatHypothesisTest:
         ax2.fill_between(x, y1, alpha=0.3, color='blue')
         ax2.fill_between(x, y2, alpha=0.3, color='red')
 
-        # r effect size interpretation
         if abs(r_rosenthal) < 0.1:
             r_effect_size = "Very small"
         elif abs(r_rosenthal) < 0.3:
@@ -2838,6 +3458,8 @@ class StatHypothesisTest:
         plt.suptitle('Effect Size Visualizations', fontsize=16, fontweight='bold')
         plt.tight_layout()
         st.pyplot(fig)
+        plt.close()
+
 
 
 class DataTreatments:
