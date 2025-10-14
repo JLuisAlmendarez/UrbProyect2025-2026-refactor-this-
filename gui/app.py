@@ -4,7 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 import pandas as pd
-from script.lib import CorrSystem, DataTreatments, StatHypothesisTest
+from script.lib import CorrSystem, DataTreatments, StatHypothesisTest, RegressionSystem, LogisticRegression, LogisticAT
 
 # -----------------------
 st.set_page_config(
@@ -46,15 +46,8 @@ __Dos variables pueden estar correlacionadas por:__
 \n
 
 _Ejemplo_: Puede haber correlación entre "número de ventiladores" y "contagios COVID", pero esto no significa que los ventiladores causen contagios. Ambas variables podrían estar relacionadas con una tercera: el hacinamiento.
-
-\n
-__Formula:__
-\n
 """)
 
-st.latex(r"""
-r = \frac{\sum_{i=1}^{n}(x_i - \bar{x})(y_i - \bar{y})}{\sqrt{\sum_{i=1}^{n}(x_i - \bar{x})^2}\sqrt{\sum_{i=1}^{n}(y_i - \bar{y})^2}}
-""")
 
 CorrSystem.do(df_corr)
 
@@ -78,9 +71,7 @@ Evalúa si los datos siguen una **distribución normal** (campana de Gauss). Uti
 Si los datos **no son normales**, se aplican transformaciones (log, Box-Cox) o se usan pruebas no paramétricas.
 \n
 """)
-st.latex(r"""
-W = \frac{\left(\sum_{i=1}^{n} a_i x_{(i)}\right)^2}{\sum_{i=1}^{n}(x_i - \bar{x})^2}
-""")
+
 st.markdown("###### Varianza")
 st.markdown("""
 Evalúa si las varianzas de los grupos son similares. Utilizamos la **prueba de Levene**:
@@ -92,9 +83,7 @@ Evalúa si las varianzas de los grupos son similares. Utilizamos la **prueba de 
 Este supuesto determina qué versión de la prueba t usar.
 """)
 
-st.latex(r"""
-W = \frac{(N-k)}{(k-1)} \frac{\sum_{i=1}^{k} n_i(Z_{i.} - Z_{..})^2}{\sum_{i=1}^{k}\sum_{j=1}^{n_i}(Z_{ij} - Z_{i.})^2}
-""")
+
 
 st.markdown("#### Pruebas:")
 st.markdown("###### Prueba t-test o t student")
@@ -111,17 +100,13 @@ Compara las medias de dos grupos asumiendo:
 - p ≥ 0.05 → No hay diferencia significativa
 """)
 
-st.latex(r"""
-t = \frac{\bar{x}_1 - \bar{x}_2}{s_p\sqrt{\frac{1}{n_1} + \frac{1}{n_2}}}
-""")
+
 
 st.markdown(r"""
 Donde $s_p$ es la desviación estándar combinada:
 """)
 
-st.latex(r"""
-s_p = \sqrt{\frac{(n_1-1)s_1^2 + (n_2-1)s_2^2}{n_1 + n_2 - 2}}
-""")
+
 
 st.markdown("###### Prueba Welch's t-test")
 st.markdown("""
@@ -130,9 +115,7 @@ Cuándo se usa: Datos normales + varianzas heterogéneas
 Versión modificada de la prueba t que **no asume** varianzas iguales. Más robusta cuando las varianzas difieren significativamente entre grupos.
 """)
 
-st.latex(r"""
-t = \frac{\bar{x}_1 - \bar{x}_2}{\sqrt{\frac{s_1^2}{n_1} + \frac{s_2^2}{n_2}}}
-""")
+
 
 st.markdown("###### Mann-Whitney U Test")
 st.markdown("""
@@ -144,9 +127,7 @@ Compara las **medianas** en lugar de las medias. No requiere normalidad. Ordena 
 - **Ventaja**: Robusta ante outliers y distribuciones asimétricas
 """)
 
-st.latex(r"""
-U = n_1 n_2 + \frac{n_1(n_1+1)}{2} - R_1
-""")
+
 
 st.markdown(r"""
 Donde $R_1$ es la suma de rangos del grupo 1.
@@ -166,14 +147,10 @@ Mide la diferencia entre medias en unidades de desviación estándar.
 - |d| ≥ 0.8 → Efecto grande
 """)
 
-st.latex(r"""
-d = \frac{\bar{x}_1 - \bar{x}_2}{s_p}
-""")
+
 
 st.markdown("###### Estimador r de Rosenthal")
 st.markdown("""
-
-Convierte el estadístico U en una correlación. Interpretación similar al coeficiente de correlación.
 
 **Interpretación**:
 - |r| < 0.1 → Efecto trivial
@@ -182,9 +159,6 @@ Convierte el estadístico U en una correlación. Interpretación similar al coef
 - |r| ≥ 0.5 → Efecto grande
 """)
 
-st.latex(r"""
-r = \frac{Z}{\sqrt{N}}
-""")
 
 
 st.markdown("###### Estimador Hodges-Lehmann")
@@ -196,9 +170,7 @@ Estima la **diferencia mediana** entre los dos grupos. Es una medida robusta de 
 - Se interpreta en las unidades originales de medición
 """)
 
-st.latex(r"""
-\Delta = \text{mediana}\{x_i - y_j : i=1,\ldots,n_1; \, j=1,\ldots,n_2\}
-""")
+
 
 
 questions = [col for col in df_hyp.columns if col != "Transecto"]
@@ -230,3 +202,19 @@ if st.button("Ejecutar Comparaciones"):
             )
 
             results[key] = (d1, d2, transform_type, test_results)
+
+st.markdown("---")
+st.header(f"**Linear Regression Frame**")
+df_regression = df.copy()
+df_regression = df_regression.drop(columns=["Ageb Manzana", "Ponderador"])
+
+st.markdown("""
+    La regresión permite modelar la relación entre una variable dependiente (Y) 
+    y variables independientes (X), permitiendo hacer predicciones.
+
+    ### Tipos de Regresión Disponibles:
+    - **OLS (Regresión Lineal):** Para variables continuas
+    - **Logística:** Para variables binarias (Sí/No)
+    - **Ordinal:** Para variables categóricas ordenadas (Bajo < Medio < Alto)
+    """)
+RegressionSystem.do(df_regression)

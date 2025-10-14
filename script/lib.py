@@ -20,30 +20,2017 @@ from scipy.stats import mannwhitneyu
 from scipy.stats import ttest_ind
 import matplotlib.pyplot as plt
 from scipy.stats import norm, t, chi2
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+import plotly.graph_objects as go
+import scipy.stats as stats
+
 
 class CorrSystem:
     @staticmethod
     def do(df):
-        # Solo variables numéricas
+        # Asegurar que solo tenemos columnas numéricas
         df_num = df.select_dtypes(include=["int64", "float64"])
 
-        # Selector de columnas en Streamlit
-        selected = st.multiselect(
-            "Selecciona columnas numéricas",
-            options=df_num.columns.tolist(),
-            default=df_num.columns.tolist()[:2]  # Preselecciona las primeras 2
+        if df_num.empty:
+            st.error("❌ No hay columnas numéricas disponibles para correlación.")
+            return
+
+        # ⭐ AGRUPAR COLUMNAS POR PREGUNTA BASE
+        question_groups = CorrSystem._group_columns_by_question(df_num.columns)
+
+        st.markdown("### 🎯 Selección de Variables")
+
+        # Mostrar información de agrupación
+        col1, col2 = st.columns([3, 1])
+
+        with col2:
+            st.metric("Preguntas disponibles", len(question_groups))
+            st.metric("Variables totales", len(df_num.columns))
+
+        with col1:
+            # ⭐ SELECTOR POR PREGUNTA (no por variable individual)
+            selected_questions = st.multiselect(
+                "Selecciona las preguntas a analizar",
+                options=list(question_groups.keys()),
+                default=list(question_groups.keys())[:min(5, len(question_groups))],
+                help="Cada pregunta incluye automáticamente todas sus categorías de respuesta"
+            )
+
+        # Validación
+        if len(selected_questions) < 2:
+            st.warning("⚠️ Selecciona al menos 2 preguntas para calcular correlaciones.")
+            return
+
+        # ⭐ EXPANDIR LAS PREGUNTAS SELECCIONADAS A SUS VARIABLES
+        selected_columns = []
+        for question in selected_questions:
+            selected_columns.extend(question_groups[question])
+
+        # Mostrar resumen de selección
+        with st.expander("📋 Ver detalle de variables seleccionadas", expanded=False):
+            for question in selected_questions:
+                st.markdown(f"**{question}**")
+                vars_list = question_groups[question]
+                st.markdown(f"- {len(vars_list)} categorías: {', '.join([v.split('_')[-1] for v in vars_list])}")
+
+        st.info(f"✅ Total de variables en análisis: **{len(selected_columns)}**")
+
+        if len(selected_columns) > 100:
+            st.warning("⚠️ Demasiadas variables. Considera seleccionar menos preguntas para mejor visualización.")
+            return
+
+        # ⭐ CALCULAR CORRELACIÓN
+        corr = df_num[selected_columns].corr()
+
+        # ⭐ TABS PARA DIFERENTES VISUALIZACIONES
+        tab1, tab2, tab3, tab4 = st.tabs(["📊 Heatmap", "🔝 Top Correlaciones", "📈 Detalles", "🔍 Entre Preguntas"])
+
+        with tab1:
+            CorrSystem._plot_heatmap(corr, selected_columns, question_groups)
+
+        with tab2:
+            CorrSystem._show_top_correlations(corr)
+
+        with tab3:
+            CorrSystem._show_correlation_table(corr)
+
+        with tab4:
+            CorrSystem._show_cross_question_correlations(corr, selected_questions, question_groups)
+
+    @staticmethod
+    def _group_columns_by_question(columns):
+        """
+        Agrupa las columnas por su pregunta base.
+
+        Ejemplo:
+        'Luz mensual_Bajo' -> 'Luz mensual'
+        'Luz mensual_Medio' -> 'Luz mensual'
+        'Agua mensual_Alto' -> 'Agua mensual'
+
+        Returns:
+            dict: {'Pregunta base': ['col1', 'col2', ...]}
+        """
+        question_groups = {}
+
+        for col in columns:
+            # Buscar el último '_' que separa pregunta de categoría
+            if '_' in col:
+                # Separar en pregunta base y categoría
+                parts = col.rsplit('_', 1)  # rsplit para tomar el ÚLTIMO '_'
+                question_base = parts[0]
+
+                # Limpiar nombre de pregunta
+                question_base = CorrSystem._clean_question_name(question_base)
+
+                if question_base not in question_groups:
+                    question_groups[question_base] = []
+                question_groups[question_base].append(col)
+            else:
+                # Variables sin categoría (no deberían existir después del encoding)
+                if "Sin categoría" not in question_groups:
+                    question_groups["Sin categoría"] = []
+                question_groups["Sin categoría"].append(col)
+
+        # Ordenar alfabéticamente
+        return dict(sorted(question_groups.items()))
+
+    @staticmethod
+    def _clean_question_name(question):
+        """
+        Limpia y acorta el nombre de la pregunta para mejor legibilidad
+        """
+        # Remover prefijos comunes de preguntas
+        replacements = {
+            "¿Cuánto paga mensualmente de ": "",
+            "¿Cuánto paga de ": "",
+            "¿Cuántos ": "",
+            "¿Tiene ": "",
+            "¿": "",
+            "?": "",
+            "mensualmente": "(mensual)",
+        }
+
+        cleaned = question
+        for old, new in replacements.items():
+            cleaned = cleaned.replace(old, new)
+
+        # Capitalizar primera letra
+        cleaned = cleaned.strip()
+        if cleaned:
+            cleaned = cleaned[0].upper() + cleaned[1:]
+
+        return cleaned
+
+    @staticmethod
+    def _plot_heatmap(corr, selected_columns, question_groups):
+        """
+        Crea un heatmap de correlación con agrupación visual por preguntas
+        """
+        st.markdown("#### Matriz de Correlación")
+
+        # Acortar nombres solo para visualización
+        display_names = [col.split('_')[-1] for col in selected_columns]
+
+        # Crear figura
+        n_vars = len(selected_columns)
+        height = max(500, min(n_vars * 25, 1200))
+
+        fig = px.imshow(
+            corr,
+            text_auto=".2f",
+            aspect="auto",
+            color_continuous_scale="RdBu_r",
+            zmin=-1,
+            zmax=1,
+            labels=dict(color="Correlación"),
+            x=display_names,
+            y=display_names
         )
 
-        # Mostrar correlación
-        if len(selected) < 2:
-            st.warning("⚠️ Selecciona al menos 2 columnas.")
-        else:
-            corr = df_num[selected].corr()
-            fig = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale="Plasma")
-            fig.update_xaxes(showticklabels=False)
-            fig.update_yaxes(showticklabels=False)
+        fig.update_xaxes(
+            side="bottom",
+            tickangle=45,
+            showticklabels=True
+        )
+        fig.update_yaxes(
+            showticklabels=True
+        )
+
+        fig.update_layout(
+            height=height,
+            title="Matriz de Correlaciones (Pearson)",
+            title_x=0.5
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Leyenda interpretativa
+        st.info("""
+        **Interpretación:**
+        - 🔵 **Azul** (≈1): Correlación positiva fuerte
+        - ⚪ **Blanco** (≈0): Sin correlación
+        - 🔴 **Rojo** (≈-1): Correlación negativa fuerte
+
+        💡 **Tip:** Las categorías de la misma pregunta suelen tener correlaciones negativas entre sí (son mutuamente excluyentes).
+        """)
+
+    @staticmethod
+    def _show_top_correlations(corr):
+        """
+        Muestra las correlaciones más fuertes (filtrando correlaciones dentro de la misma pregunta)
+        """
+        st.markdown("#### Top Correlaciones más Fuertes")
+
+        # Extraer pares únicos
+        corr_pairs = []
+        for i in range(len(corr.columns)):
+            for j in range(i + 1, len(corr.columns)):
+                var1 = corr.columns[i]
+                var2 = corr.columns[j]
+
+                # ⭐ FILTRAR: No mostrar correlaciones dentro de la misma pregunta
+                question1 = var1.rsplit('_', 1)[0] if '_' in var1 else var1
+                question2 = var2.rsplit('_', 1)[0] if '_' in var2 else var2
+
+                # Solo incluir si son de preguntas diferentes
+                if question1 != question2:
+                    corr_pairs.append({
+                        'Variable 1': var1,
+                        'Variable 2': var2,
+                        'Correlación': corr.iloc[i, j],
+                        'Abs_Corr': abs(corr.iloc[i, j])
+                    })
+
+        if not corr_pairs:
+            st.warning("⚠️ No hay correlaciones entre diferentes preguntas.")
+            return
+
+        df_pairs = pd.DataFrame(corr_pairs)
+        df_pairs = df_pairs.sort_values('Abs_Corr', ascending=False)
+
+        # Mostrar top 15
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("##### 🔝 Top 15 Correlaciones Positivas")
+            top_positive = df_pairs[df_pairs['Correlación'] > 0].head(15)
+            if not top_positive.empty:
+                st.dataframe(
+                    top_positive[['Variable 1', 'Variable 2', 'Correlación']].style.format({'Correlación': '{:.3f}'}),
+                    hide_index=True,
+                    height=400
+                )
+            else:
+                st.info("No hay correlaciones positivas significativas")
+
+        with col2:
+            st.markdown("##### 🔻 Top 15 Correlaciones Negativas")
+            top_negative = df_pairs[df_pairs['Correlación'] < 0].head(15)
+            if not top_negative.empty:
+                st.dataframe(
+                    top_negative[['Variable 1', 'Variable 2', 'Correlación']].style.format({'Correlación': '{:.3f}'}),
+                    hide_index=True,
+                    height=400
+                )
+            else:
+                st.info("No hay correlaciones negativas significativas")
+
+        # Distribución
+        st.markdown("##### Distribución de Correlaciones (entre preguntas diferentes)")
+        fig = px.histogram(
+            df_pairs,
+            x='Correlación',
+            nbins=50,
+            title="Distribución de correlaciones entre diferentes preguntas",
+            labels={'Correlación': 'Coeficiente de Correlación', 'count': 'Frecuencia'}
+        )
+        fig.add_vline(x=0, line_dash="dash", line_color="red")
+        st.plotly_chart(fig, use_container_width=True)
+
+    @staticmethod
+    def _show_correlation_table(corr):
+        """
+        Muestra la tabla completa de correlaciones
+        """
+        st.markdown("#### Matriz de Correlación Completa")
+
+        st.dataframe(
+            corr.style.background_gradient(cmap='RdBu_r', vmin=-1, vmax=1).format('{:.3f}'),
+            use_container_width=True,
+            height=600
+        )
+
+        # Descarga
+        csv = corr.to_csv(index=True)
+        st.download_button(
+            label="📥 Descargar Matriz de Correlación (CSV)",
+            data=csv,
+            file_name="matriz_correlacion.csv",
+            mime="text/csv"
+        )
+
+        # Estadísticas (solo correlaciones entre diferentes preguntas)
+        st.markdown("#### Estadísticas de Correlación")
+
+        mask = np.triu(np.ones_like(corr, dtype=bool), k=1)
+        corr_values = corr.where(mask).values.flatten()
+        corr_values = corr_values[~np.isnan(corr_values)]
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("Media", f"{corr_values.mean():.3f}")
+        with col2:
+            st.metric("Máxima", f"{corr_values.max():.3f}")
+        with col3:
+            st.metric("Mínima", f"{corr_values.min():.3f}")
+        with col4:
+            st.metric("Desv. Std", f"{corr_values.std():.3f}")
+
+    @staticmethod
+    def _show_cross_question_correlations(corr, selected_questions, question_groups):
+        """
+        Nueva pestaña: Muestra correlaciones PROMEDIO entre pares de preguntas
+        """
+        st.markdown("#### Correlaciones Promedio Entre Preguntas")
+        st.markdown(
+            "Esta vista muestra la correlación promedio entre todas las categorías de dos preguntas diferentes.")
+
+        # Calcular matriz de correlaciones promedio entre preguntas
+        question_corr_data = []
+
+        for i, q1 in enumerate(selected_questions):
+            for j, q2 in enumerate(selected_questions):
+                if i < j:  # Solo mitad superior (sin diagonal)
+                    # Obtener todas las variables de cada pregunta
+                    vars_q1 = question_groups[q1]
+                    vars_q2 = question_groups[q2]
+
+                    # Calcular correlación promedio entre todas las combinaciones
+                    correlations = []
+                    for v1 in vars_q1:
+                        for v2 in vars_q2:
+                            if v1 in corr.columns and v2 in corr.columns:
+                                correlations.append(corr.loc[v1, v2])
+
+                    if correlations:
+                        avg_corr = np.mean(correlations)
+                        max_corr = np.max(np.abs(correlations))
+
+                        question_corr_data.append({
+                            'Pregunta 1': q1,
+                            'Pregunta 2': q2,
+                            'Correlación Promedio': avg_corr,
+                            'Correlación Máxima (abs)': max_corr,
+                            'N° Comparaciones': len(correlations)
+                        })
+
+        if not question_corr_data:
+            st.info("No hay suficientes preguntas para comparar.")
+            return
+
+        df_question_corr = pd.DataFrame(question_corr_data)
+        df_question_corr = df_question_corr.sort_values('Correlación Máxima (abs)', ascending=False)
+
+        # Mostrar tabla
+        st.dataframe(
+            df_question_corr.style.format({
+                'Correlación Promedio': '{:.3f}',
+                'Correlación Máxima (abs)': '{:.3f}'
+            }),
+            hide_index=True,
+            use_container_width=True,
+            height=400
+        )
+
+        # Heatmap de correlaciones promedio entre preguntas
+        if len(selected_questions) > 2:
+            st.markdown("##### Mapa de Correlaciones Entre Preguntas")
+
+            # Crear matriz cuadrada
+            question_corr_matrix = pd.DataFrame(
+                np.zeros((len(selected_questions), len(selected_questions))),
+                index=selected_questions,
+                columns=selected_questions
+            )
+
+            for _, row in df_question_corr.iterrows():
+                q1 = row['Pregunta 1']
+                q2 = row['Pregunta 2']
+                corr_val = row['Correlación Promedio']
+                question_corr_matrix.loc[q1, q2] = corr_val
+                question_corr_matrix.loc[q2, q1] = corr_val
+
+            # Diagonal = 1
+            np.fill_diagonal(question_corr_matrix.values, 1)
+
+            fig = px.imshow(
+                question_corr_matrix,
+                text_auto=".2f",
+                aspect="auto",
+                color_continuous_scale="RdBu_r",
+                zmin=-1,
+                zmax=1,
+                labels=dict(color="Correlación Promedio")
+            )
+
+            fig.update_layout(
+                height=600,
+                title="Correlación Promedio entre Preguntas"
+            )
+
             st.plotly_chart(fig, use_container_width=True)
 
+
+class RegressionSystem:
+    REGRESSION_TYPES = {
+        'ols': {
+            'name': 'Regresión Lineal Múltiple (OLS)',
+            'description': 'Para variables continuas. Predice valores numéricos.',
+            'best_for': 'Variable Y continua (ej: gastos, ingresos, edad)',
+            'y_type': 'continuous'
+        },
+        'logistic': {
+            'name': 'Regresión Logística',
+            'description': 'Para variables binarias. Predice probabilidades.',
+            'best_for': 'Variable Y binaria (ej: Sí/No, Tiene/No tiene)',
+            'y_type': 'binary'
+        },
+        'ordinal': {
+            'name': 'Regresión Ordinal',
+            'description': 'Para variables categóricas ordenadas.',
+            'best_for': 'Variable Y ordinal (ej: Bajo < Medio < Alto)',
+            'y_type': 'ordinal'
+        }
+    }
+
+    @staticmethod
+    def do(df):
+        """Orquestador principal del sistema de regresión"""
+
+        st.markdown("### 📊 Análisis de Regresión")
+
+        # Preparar datos
+        with st.spinner("Preparando datos para regresión..."):
+            df_processed, category_mappings = DataTreatments.regression_data_handler(df)
+
+        st.success(f"✅ Datos procesados: {df_processed.shape[1]} variables disponibles")
+
+        # Paso 1: Selección de variable dependiente (Y)
+        st.markdown("#### 🎯 Paso 1: Variable Dependiente (Y)")
+
+        selected_y = st.selectbox(
+            "Selecciona la variable que quieres predecir (Y)",
+            options=df_processed.columns.tolist(),
+            help="Esta es la variable objetivo que el modelo intentará predecir"
+        )
+
+        # Análisis de la variable Y
+        y_series = df_processed[selected_y]
+        y_info = RegressionSystem._analyze_y_variable(y_series)
+
+        # Mostrar información de Y
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Valores únicos", y_info['n_unique'])
+        with col2:
+            st.metric("Valores faltantes", y_info['n_missing'])
+        with col3:
+            st.metric("Tipo sugerido", y_info['suggested_type'])
+
+        # Visualización de Y
+        with st.expander("📊 Ver distribución de Y", expanded=False):
+            RegressionSystem._plot_y_distribution(y_series, y_info)
+
+        # Paso 2: Selección del tipo de regresión
+        st.markdown("#### 🔧 Paso 2: Tipo de Regresión")
+
+        regression_type = st.selectbox(
+            "Selecciona el tipo de regresión",
+            options=['ols', 'logistic', 'ordinal'],
+            format_func=lambda x: RegressionSystem.REGRESSION_TYPES[x]['name'],
+            index=['ols', 'logistic', 'ordinal'].index(y_info['suggested_model']),
+            help="El tipo sugerido se basa en el análisis de tu variable Y"
+        )
+
+        # Información del modelo
+        model_info = RegressionSystem.REGRESSION_TYPES[regression_type]
+        st.info(f"""
+        **{model_info['name']}**
+
+        📝 {model_info['description']}
+
+        ✅ **Mejor para:** {model_info['best_for']}
+        """)
+
+        # Validación de compatibilidad
+        if not RegressionSystem._validate_y_for_model(y_info, regression_type):
+            st.error(f"⚠️ La variable Y no es apropiada para {model_info['name']}. "
+                     f"Se recomienda usar {y_info['suggested_model'].upper()}.")
+            return
+
+        # Paso 3: Selección de variables independientes (X)
+        st.markdown("#### 🔬 Paso 3: Variables Independientes (X)")
+
+        available_x = [col for col in df_processed.columns if col != selected_y]
+
+        # Agrupar variables por pregunta
+        question_groups = RegressionSystem._group_columns_by_question(available_x)
+
+        col1, col2 = st.columns([3, 1])
+
+        with col1:
+            selection_method = st.radio(
+                "Método de selección",
+                options=['manual', 'by_question', 'by_correlation'],
+                format_func=lambda x: {
+                    'manual': '📝 Selección manual (variables individuales)',
+                    'by_question': '📋 Por pregunta (grupos automáticos)',
+                    'by_correlation': '🔗 Por correlación con Y (top N)'
+                }[x],
+                horizontal=True
+            )
+
+        with col2:
+            st.metric("Variables disponibles", len(available_x))
+
+        # Selección según método
+        if selection_method == 'manual':
+            selected_x = st.multiselect(
+                "Selecciona variables predictoras",
+                options=available_x,
+                default=available_x[:min(5, len(available_x))],
+                help="Puedes seleccionar múltiples variables"
+            )
+
+        elif selection_method == 'by_question':
+            selected_questions = st.multiselect(
+                "Selecciona preguntas (incluye todas sus categorías)",
+                options=list(question_groups.keys()),
+                default=list(question_groups.keys())[:min(3, len(question_groups))],
+                help="Cada pregunta incluye automáticamente todas sus categorías"
+            )
+
+            # Expandir preguntas a variables
+            selected_x = []
+            for question in selected_questions:
+                selected_x.extend(question_groups[question])
+
+            with st.expander("📋 Variables incluidas", expanded=False):
+                for question in selected_questions:
+                    st.markdown(f"**{question}**")
+                    vars_list = [v.split('_')[-1] for v in question_groups[question]]
+                    st.markdown(f"- {len(vars_list)} categorías: {', '.join(vars_list)}")
+
+        else:  # by_correlation
+            top_n = st.slider("Número de variables más correlacionadas", 5, 50, 15)
+
+            # Calcular correlaciones
+            correlations = df_processed[available_x].corrwith(y_series).abs().sort_values(ascending=False)
+            selected_x = correlations.head(top_n).index.tolist()
+
+            st.dataframe(
+                pd.DataFrame({
+                    'Variable': selected_x,
+                    'Correlación (abs)': [correlations[v] for v in selected_x]
+                }).style.format({'Correlación (abs)': '{:.3f}'}),
+                hide_index=True,
+                height=300
+            )
+
+        if len(selected_x) < 1:
+            st.warning("⚠️ Selecciona al menos 1 variable independiente.")
+            return
+
+        st.info(f"✅ Total de variables predictoras: **{len(selected_x)}**")
+
+        # Paso 4: Configuración del modelo
+        st.markdown("#### ⚙️ Paso 4: Configuración")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            test_size = st.slider(
+                "% de datos para prueba",
+                min_value=10,
+                max_value=40,
+                value=20,
+                step=5,
+                help="Porcentaje de datos reservados para validar el modelo"
+            )
+
+        with col2:
+            random_state = st.number_input(
+                "Semilla aleatoria",
+                min_value=0,
+                max_value=9999,
+                value=42,
+                help="Para reproducibilidad de resultados"
+            )
+
+        # Botón de entrenamiento
+        if st.button("🚀 Entrenar Modelo", type="primary", use_container_width=True):
+
+            with st.spinner("Entrenando modelo..."):
+                # Preparar datos
+                X = df_processed[selected_x].copy()
+                y = y_series.copy()
+
+                # Eliminar filas con NaN
+                valid_idx = ~(X.isna().any(axis=1) | y.isna())
+                X = X[valid_idx]
+                y = y[valid_idx]
+
+                if len(X) < 10:
+                    st.error("❌ No hay suficientes datos válidos para entrenar (mínimo 10 observaciones)")
+                    return
+
+                # Entrenar modelo
+                results = RegressionSystem._train_model(
+                    X, y,
+                    regression_type=regression_type,
+                    test_size=test_size / 100,
+                    random_state=random_state
+                )
+
+                if results is None:
+                    st.error("❌ Error al entrenar el modelo")
+                    return
+
+                # Guardar en session_state
+                st.session_state['regression_results'] = results
+                st.session_state['regression_config'] = {
+                    'y_name': selected_y,
+                    'x_names': selected_x,
+                    'regression_type': regression_type
+                }
+
+            st.success("✅ Modelo entrenado exitosamente!")
+            st.rerun()
+
+        # Mostrar resultados si existen
+        if 'regression_results' in st.session_state:
+            st.markdown("## 📈 Resultados del Modelo")
+
+            results = st.session_state['regression_results']
+            config = st.session_state['regression_config']
+
+            # Tabs de resultados
+            tab1, tab2, tab3, tab4 = st.tabs([
+                "📊 Métricas",
+                "📉 Visualizaciones",
+                "🎯 Coeficientes",
+                "📥 Exportar"
+            ])
+
+            with tab1:
+                RegressionSystem._show_metrics(results, config['regression_type'])
+
+            with tab2:
+                RegressionSystem._show_visualizations(results, config)
+
+            with tab3:
+                RegressionSystem._show_coefficients(results, config)
+
+            with tab4:
+                RegressionSystem._show_export_options(results, config)
+
+    @staticmethod
+    def _analyze_y_variable(y_series):
+        """Analiza la variable Y y sugiere el tipo de regresión apropiado"""
+
+        n_unique = y_series.nunique()
+        n_missing = y_series.isna().sum()
+
+        # Determinar tipo sugerido
+        if n_unique == 2:
+            suggested_type = 'Binaria'
+            suggested_model = 'logistic'
+        elif n_unique <= 10:
+            # Verificar si parece ordinal
+            unique_vals = sorted(y_series.dropna().unique())
+            if all(isinstance(v, (int, float)) for v in unique_vals):
+                suggested_type = 'Ordinal/Discreta'
+                suggested_model = 'ordinal'
+            else:
+                suggested_type = 'Categórica'
+                suggested_model = 'ordinal'
+        else:
+            suggested_type = 'Continua'
+            suggested_model = 'ols'
+
+        return {
+            'n_unique': n_unique,
+            'n_missing': n_missing,
+            'suggested_type': suggested_type,
+            'suggested_model': suggested_model,
+            'min': y_series.min(),
+            'max': y_series.max(),
+            'mean': y_series.mean() if n_unique > 2 else None,
+            'std': y_series.std() if n_unique > 2 else None
+        }
+
+    @staticmethod
+    def _plot_y_distribution(y_series, y_info):
+        """Visualiza la distribución de Y"""
+
+        if y_info['n_unique'] <= 20:
+            # Gráfico de barras para variables discretas
+            value_counts = y_series.value_counts().sort_index()
+            fig = px.bar(
+                x=value_counts.index,
+                y=value_counts.values,
+                labels={'x': 'Valor', 'y': 'Frecuencia'},
+                title=f"Distribución de la Variable Y (n={len(y_series)})"
+            )
+        else:
+            # Histograma para variables continuas
+            fig = px.histogram(
+                y_series,
+                nbins=50,
+                labels={'value': 'Valor', 'count': 'Frecuencia'},
+                title=f"Distribución de la Variable Y (n={len(y_series)})"
+            )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Estadísticas descriptivas
+        if y_info['mean'] is not None:
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Mínimo", f"{y_info['min']:.2f}")
+            with col2:
+                st.metric("Media", f"{y_info['mean']:.2f}")
+            with col3:
+                st.metric("Máximo", f"{y_info['max']:.2f}")
+            with col4:
+                st.metric("Desv. Std", f"{y_info['std']:.2f}")
+
+    @staticmethod
+    def _validate_y_for_model(y_info, regression_type):
+        """Valida que Y sea apropiada para el modelo seleccionado"""
+
+        if regression_type == 'logistic' and y_info['n_unique'] != 2:
+            return False
+
+        if regression_type == 'ordinal' and y_info['n_unique'] < 3:
+            return False
+
+        if regression_type == 'ols' and y_info['n_unique'] < 10:
+            # Advertencia pero no bloquear
+            st.warning("⚠️ Y tiene pocos valores únicos. Considera usar regresión ordinal.")
+
+        return True
+
+    @staticmethod
+    def _analyze_y_variable(y_series):
+        """Analiza la variable Y y sugiere el tipo de regresión apropiado"""
+
+        n_unique = y_series.nunique()
+        n_missing = y_series.isna().sum()
+
+        # Determinar tipo sugerido
+        if n_unique == 2:
+            suggested_type = 'Binaria'
+            suggested_model = 'logistic'
+        elif n_unique <= 10:
+            # Verificar si parece ordinal
+            unique_vals = sorted(y_series.dropna().unique())
+            if all(isinstance(v, (int, float)) for v in unique_vals):
+                suggested_type = 'Ordinal/Discreta'
+                suggested_model = 'ordinal'
+            else:
+                suggested_type = 'Categórica'
+                suggested_model = 'ordinal'
+        else:
+            suggested_type = 'Continua'
+            suggested_model = 'ols'
+
+        return {
+            'n_unique': n_unique,
+            'n_missing': n_missing,
+            'suggested_type': suggested_type,
+            'suggested_model': suggested_model,
+            'min': y_series.min(),
+            'max': y_series.max(),
+            'mean': y_series.mean() if n_unique > 2 else None,
+            'std': y_series.std() if n_unique > 2 else None
+        }
+
+    @staticmethod
+    def _plot_y_distribution(y_series, y_info):
+        """Visualiza la distribución de Y"""
+
+        if y_info['n_unique'] <= 20:
+            # Gráfico de barras para variables discretas
+            value_counts = y_series.value_counts().sort_index()
+            fig = px.bar(
+                x=value_counts.index,
+                y=value_counts.values,
+                labels={'x': 'Valor', 'y': 'Frecuencia'},
+                title=f"Distribución de la Variable Y (n={len(y_series)})"
+            )
+        else:
+            # Histograma para variables continuas
+            fig = px.histogram(
+                y_series,
+                nbins=50,
+                labels={'value': 'Valor', 'count': 'Frecuencia'},
+                title=f"Distribución de la Variable Y (n={len(y_series)})"
+            )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Estadísticas descriptivas
+        if y_info['mean'] is not None:
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Mínimo", f"{y_info['min']:.2f}")
+            with col2:
+                st.metric("Media", f"{y_info['mean']:.2f}")
+            with col3:
+                st.metric("Máximo", f"{y_info['max']:.2f}")
+            with col4:
+                st.metric("Desv. Std", f"{y_info['std']:.2f}")
+
+    @staticmethod
+    def _validate_y_for_model(y_info, regression_type):
+        """Valida que Y sea apropiada para el modelo seleccionado"""
+
+        if regression_type == 'logistic' and y_info['n_unique'] != 2:
+            return False
+
+        if regression_type == 'ordinal' and y_info['n_unique'] < 3:
+            return False
+
+        if regression_type == 'ols' and y_info['n_unique'] < 10:
+            # Advertencia pero no bloquear
+            st.warning("⚠️ Y tiene pocos valores únicos. Considera usar regresión ordinal.")
+
+        return True
+
+    @staticmethod
+    def _group_columns_by_question(columns):
+        """Agrupa columnas por pregunta base"""
+        question_groups = {}
+
+        for col in columns:
+            if '_' in col:
+                parts = col.rsplit('_', 1)
+                question_base = parts[0]
+
+                # Limpiar nombre
+                question_base = question_base.replace('¿', '').replace('?', '').strip()
+
+                if question_base not in question_groups:
+                    question_groups[question_base] = []
+                question_groups[question_base].append(col)
+            else:
+                if "Sin categoría" not in question_groups:
+                    question_groups["Sin categoría"] = []
+                question_groups["Sin categoría"].append(col)
+
+        return dict(sorted(question_groups.items()))
+
+    @staticmethod
+    def _train_model(X, y, regression_type, test_size=0.2, random_state=42):
+        """
+        Entrena el modelo seleccionado y retorna los resultados
+        """
+        try:
+            # Split train/test
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test_size, random_state=random_state
+            )
+
+            # Estandarizar X (importante para regresión)
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(X_test)
+
+            # Convertir de vuelta a DataFrame para mantener nombres
+            X_train_scaled = pd.DataFrame(X_train_scaled, columns=X.columns, index=X_train.index)
+            X_test_scaled = pd.DataFrame(X_test_scaled, columns=X.columns, index=X_test.index)
+
+            # Entrenar según tipo
+            if regression_type == 'ols':
+                model, metrics = RegressionSystem._train_ols(
+                    X_train_scaled, X_test_scaled, y_train, y_test
+                )
+
+            elif regression_type == 'logistic':
+                model, metrics = RegressionSystem._train_logistic(
+                    X_train_scaled, X_test_scaled, y_train, y_test
+                )
+
+            elif regression_type == 'ordinal':
+                model, metrics = RegressionSystem._train_ordinal(
+                    X_train_scaled, X_test_scaled, y_train, y_test
+                )
+
+            else:
+                return None
+
+            # Predicciones
+            y_train_pred = model.predict(X_train_scaled)
+            y_test_pred = model.predict(X_test_scaled)
+
+            # Empaquetar resultados
+            results = {
+                'model': model,
+                'scaler': scaler,
+                'X_train': X_train,
+                'X_test': X_test,
+                'X_train_scaled': X_train_scaled,
+                'X_test_scaled': X_test_scaled,
+                'y_train': y_train,
+                'y_test': y_test,
+                'y_train_pred': y_train_pred,
+                'y_test_pred': y_test_pred,
+                'metrics': metrics,
+                'feature_names': X.columns.tolist()
+            }
+
+            return results
+
+        except Exception as e:
+            st.error(f"Error al entrenar el modelo: {str(e)}")
+            return None
+
+    @staticmethod
+    def _train_ols(X_train, X_test, y_train, y_test):
+        """Entrena regresión lineal OLS"""
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+
+        # Predicciones
+        y_train_pred = model.predict(X_train)
+        y_test_pred = model.predict(X_test)
+
+        # Métricas
+        metrics = {
+            'train': {
+                'r2': r2_score(y_train, y_train_pred),
+                'rmse': np.sqrt(mean_squared_error(y_train, y_train_pred)),
+                'mae': mean_absolute_error(y_train, y_train_pred)
+            },
+            'test': {
+                'r2': r2_score(y_test, y_test_pred),
+                'rmse': np.sqrt(mean_squared_error(y_test, y_test_pred)),
+                'mae': mean_absolute_error(y_test, y_test_pred)
+            }
+        }
+
+        # R² ajustado
+        n = len(y_train)
+        p = X_train.shape[1]
+        r2_train = metrics['train']['r2']
+        metrics['train']['r2_adjusted'] = 1 - (1 - r2_train) * (n - 1) / (n - p - 1)
+
+        n_test = len(y_test)
+        r2_test = metrics['test']['r2']
+        metrics['test']['r2_adjusted'] = 1 - (1 - r2_test) * (n_test - 1) / (n_test - p - 1)
+
+        return model, metrics
+
+    @staticmethod
+    def _train_logistic(X_train, X_test, y_train, y_test):
+        """Entrena regresión logística"""
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        model.fit(X_train, y_train)
+
+        # Predicciones
+        y_train_pred = model.predict(X_train)
+        y_test_pred = model.predict(X_test)
+
+        # Probabilidades
+        y_train_proba = model.predict_proba(X_train)[:, 1]
+        y_test_proba = model.predict_proba(X_test)[:, 1]
+
+        # Métricas
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+
+        metrics = {
+            'train': {
+                'accuracy': accuracy_score(y_train, y_train_pred),
+                'precision': precision_score(y_train, y_train_pred, zero_division=0),
+                'recall': recall_score(y_train, y_train_pred, zero_division=0),
+                'f1': f1_score(y_train, y_train_pred, zero_division=0),
+                'roc_auc': roc_auc_score(y_train, y_train_proba)
+            },
+            'test': {
+                'accuracy': accuracy_score(y_test, y_test_pred),
+                'precision': precision_score(y_test, y_test_pred, zero_division=0),
+                'recall': recall_score(y_test, y_test_pred, zero_division=0),
+                'f1': f1_score(y_test, y_test_pred, zero_division=0),
+                'roc_auc': roc_auc_score(y_test, y_test_proba)
+            },
+            'probabilities': {
+                'train': y_train_proba,
+                'test': y_test_proba
+            }
+        }
+
+        return model, metrics
+
+    @staticmethod
+    def _train_ordinal(X_train, X_test, y_train, y_test):
+        """Entrena regresión ordinal"""
+        try:
+            from mord import LogisticAT
+            model = LogisticAT()
+        except ImportError:
+            st.warning("⚠️ Librería 'mord' no disponible. Usando regresión lineal como alternativa.")
+            # Fallback a OLS si mord no está disponible
+            return RegressionSystem._train_ols(X_train, X_test, y_train, y_test)
+
+        model.fit(X_train, y_train)
+
+        # Predicciones
+        y_train_pred = model.predict(X_train)
+        y_test_pred = model.predict(X_test)
+
+        # Métricas
+        from sklearn.metrics import accuracy_score, mean_absolute_error
+
+        metrics = {
+            'train': {
+                'accuracy': accuracy_score(y_train, y_train_pred),
+                'mae': mean_absolute_error(y_train, y_train_pred),
+                'mae_baseline': mean_absolute_error(y_train, [y_train.mode()[0]] * len(y_train))
+            },
+            'test': {
+                'accuracy': accuracy_score(y_test, y_test_pred),
+                'mae': mean_absolute_error(y_test, y_test_pred),
+                'mae_baseline': mean_absolute_error(y_test, [y_train.mode()[0]] * len(y_test))
+            }
+        }
+
+        return model, metrics
+
+    @staticmethod
+    def _show_metrics(results, regression_type):
+        """Muestra las métricas del modelo"""
+
+        st.markdown("### 📊 Métricas de Desempeño")
+
+        metrics = results['metrics']
+
+        if regression_type == 'ols':
+            # Métricas para regresión lineal
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### 🎓 Conjunto de Entrenamiento")
+                st.metric("R² Score", f"{metrics['train']['r2']:.4f}")
+                st.metric("R² Ajustado", f"{metrics['train']['r2_adjusted']:.4f}")
+                st.metric("RMSE", f"{metrics['train']['rmse']:.4f}")
+                st.metric("MAE", f"{metrics['train']['mae']:.4f}")
+
+            with col2:
+                st.markdown("#### 🧪 Conjunto de Prueba")
+                st.metric("R² Score", f"{metrics['test']['r2']:.4f}")
+                st.metric("R² Ajustado", f"{metrics['test']['r2_adjusted']:.4f}")
+                st.metric("RMSE", f"{metrics['test']['rmse']:.4f}")
+                st.metric("MAE", f"{metrics['test']['mae']:.4f}")
+
+            # Interpretación
+            st.markdown("#### 📖 Interpretación")
+
+            r2_test = metrics['test']['r2']
+
+            if r2_test >= 0.8:
+                interpretation = "🟢 **Excelente ajuste:** El modelo explica más del 80% de la variabilidad en Y."
+            elif r2_test >= 0.6:
+                interpretation = "🟡 **Buen ajuste:** El modelo explica entre 60-80% de la variabilidad en Y."
+            elif r2_test >= 0.4:
+                interpretation = "🟠 **Ajuste moderado:** El modelo explica entre 40-60% de la variabilidad en Y."
+            else:
+                interpretation = "🔴 **Ajuste pobre:** El modelo explica menos del 40% de la variabilidad en Y."
+
+            st.info(f"""
+                {interpretation}
+
+                **R² = {r2_test:.3f}** significa que el modelo explica el {r2_test * 100:.1f}% de la varianza en la variable dependiente.
+
+                **RMSE = {metrics['test']['rmse']:.3f}** indica que, en promedio, las predicciones difieren de los valores reales en ±{metrics['test']['rmse']:.3f} unidades.
+                """)
+
+            # Comparar train vs test
+            diff_r2 = abs(metrics['train']['r2'] - metrics['test']['r2'])
+            if diff_r2 > 0.1:
+                st.warning(
+                    f"⚠️ **Posible overfitting:** La diferencia entre R² de entrenamiento ({metrics['train']['r2']:.3f}) "
+                    f"y prueba ({metrics['test']['r2']:.3f}) es significativa ({diff_r2:.3f}).")
+
+        elif regression_type == 'logistic':
+            # Métricas para regresión logística
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### 🎓 Conjunto de Entrenamiento")
+                st.metric("Accuracy", f"{metrics['train']['accuracy']:.4f}")
+                st.metric("Precision", f"{metrics['train']['precision']:.4f}")
+                st.metric("Recall", f"{metrics['train']['recall']:.4f}")
+                st.metric("F1-Score", f"{metrics['train']['f1']:.4f}")
+                st.metric("ROC-AUC", f"{metrics['train']['roc_auc']:.4f}")
+
+            with col2:
+                st.markdown("#### 🧪 Conjunto de Prueba")
+                st.metric("Accuracy", f"{metrics['test']['accuracy']:.4f}")
+                st.metric("Precision", f"{metrics['test']['precision']:.4f}")
+                st.metric("Recall", f"{metrics['test']['recall']:.4f}")
+                st.metric("F1-Score", f"{metrics['test']['f1']:.4f}")
+                st.metric("ROC-AUC", f"{metrics['test']['roc_auc']:.4f}")
+
+            # Matriz de confusión
+            st.markdown("#### 🎯 Matriz de Confusión (Prueba)")
+
+            from sklearn.metrics import confusion_matrix
+            cm = confusion_matrix(results['y_test'], results['y_test_pred'])
+
+            fig = px.imshow(
+                cm,
+                text_auto=True,
+                labels=dict(x="Predicción", y="Real", color="Cantidad"),
+                x=['Clase 0', 'Clase 1'],
+                y=['Clase 0', 'Clase 1'],
+                color_continuous_scale='Blues'
+            )
+            fig.update_layout(title="Matriz de Confusión")
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Interpretación
+            st.markdown("#### 📖 Interpretación")
+            acc = metrics['test']['accuracy']
+
+            st.info(f"""
+                **Accuracy = {acc:.3f}**: El modelo clasifica correctamente el {acc * 100:.1f}% de las observaciones.
+
+                **Precision = {metrics['test']['precision']:.3f}**: De las predicciones positivas, el {metrics['test']['precision'] * 100:.1f}% son correctas.
+
+                **Recall = {metrics['test']['recall']:.3f}**: El modelo detecta el {metrics['test']['recall'] * 100:.1f}% de los casos positivos reales.
+
+                **ROC-AUC = {metrics['test']['roc_auc']:.3f}**: Capacidad del modelo para distinguir entre clases (1.0 = perfecto).
+                """)
+
+        elif regression_type == 'ordinal':
+            # Métricas para regresión ordinal
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### 🎓 Conjunto de Entrenamiento")
+                st.metric("Accuracy", f"{metrics['train']['accuracy']:.4f}")
+                st.metric("MAE", f"{metrics['train']['mae']:.4f}")
+                st.metric("MAE Baseline", f"{metrics['train']['mae_baseline']:.4f}")
+
+            with col2:
+                st.markdown("#### 🧪 Conjunto de Prueba")
+                st.metric("Accuracy", f"{metrics['test']['accuracy']:.4f}")
+                st.metric("MAE", f"{metrics['test']['mae']:.4f}")
+                st.metric("MAE Baseline", f"{metrics['test']['mae_baseline']:.4f}")
+
+            # Interpretación
+            st.markdown("#### 📖 Interpretación")
+
+            improvement = (metrics['test']['mae_baseline'] - metrics['test']['mae']) / metrics['test']['mae_baseline']
+
+            st.info(f"""
+                **Accuracy = {metrics['test']['accuracy']:.3f}**: El modelo predice la categoría exacta correctamente el {metrics['test']['accuracy'] * 100:.1f}% del tiempo.
+
+                **MAE = {metrics['test']['mae']:.3f}**: En promedio, las predicciones difieren en {metrics['test']['mae']:.2f} categorías de los valores reales.
+
+                **Mejora sobre baseline:** {improvement * 100:.1f}% mejor que predecir siempre la categoría más frecuente.
+                """)
+
+    @staticmethod
+    def _show_visualizations(results, config):
+        """Muestra las visualizaciones del modelo"""
+
+        regression_type = config['regression_type']
+
+        if regression_type == 'ols':
+            RegressionSystem._plot_ols_visualizations(results, config)
+        elif regression_type == 'logistic':
+            RegressionSystem._plot_logistic_visualizations(results, config)
+        elif regression_type == 'ordinal':
+            RegressionSystem._plot_ordinal_visualizations(results, config)
+
+    @staticmethod
+    def _plot_ols_visualizations(results, config):
+        """Visualizaciones para regresión lineal OLS"""
+
+        # 1. Predicciones vs Reales
+        st.markdown("### 📊 Predicciones vs Valores Reales")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Entrenamiento")
+            fig = go.Figure()
+
+            # Scatter plot
+            fig.add_trace(go.Scatter(
+                x=results['y_train'],
+                y=results['y_train_pred'],
+                mode='markers',
+                name='Predicciones',
+                marker=dict(color='blue', size=6, opacity=0.6)
+            ))
+
+            # Línea perfecta
+            min_val = min(results['y_train'].min(), results['y_train_pred'].min())
+            max_val = max(results['y_train'].max(), results['y_train_pred'].max())
+            fig.add_trace(go.Scatter(
+                x=[min_val, max_val],
+                y=[min_val, max_val],
+                mode='lines',
+                name='Predicción perfecta',
+                line=dict(color='red', dash='dash')
+            ))
+
+            fig.update_layout(
+                xaxis_title="Valores Reales",
+                yaxis_title="Valores Predichos",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.markdown("#### Prueba")
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=results['y_test'],
+                y=results['y_test_pred'],
+                mode='markers',
+                name='Predicciones',
+                marker=dict(color='green', size=6, opacity=0.6)
+            ))
+
+            min_val = min(results['y_test'].min(), results['y_test_pred'].min())
+            max_val = max(results['y_test'].max(), results['y_test_pred'].max())
+            fig.add_trace(go.Scatter(
+                x=[min_val, max_val],
+                y=[min_val, max_val],
+                mode='lines',
+                name='Predicción perfecta',
+                line=dict(color='red', dash='dash')
+            ))
+
+            fig.update_layout(
+                xaxis_title="Valores Reales",
+                yaxis_title="Valores Predichos",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # 2. Residuos vs Predicciones
+        st.markdown("### 📉 Análisis de Residuos")
+
+        residuals_test = results['y_test'] - results['y_test_pred']
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Residuos vs Predicciones")
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=results['y_test_pred'],
+                y=residuals_test,
+                mode='markers',
+                marker=dict(color='purple', size=6, opacity=0.6)
+            ))
+
+            # Línea en cero
+            fig.add_hline(y=0, line_dash="dash", line_color="red")
+
+            fig.update_layout(
+                xaxis_title="Valores Predichos",
+                yaxis_title="Residuos",
+                height=400,
+                title="Los residuos deben distribuirse aleatoriamente alrededor de 0"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.info("""
+                **¿Qué buscar?**
+                - ✅ Residuos distribuidos aleatoriamente alrededor de 0
+                - ❌ Patrones sistemáticos (curvas, abanico) indican problemas
+                """)
+
+        with col2:
+            st.markdown("#### Distribución de Residuos")
+            fig = px.histogram(
+                residuals_test,
+                nbins=30,
+                labels={'value': 'Residuos', 'count': 'Frecuencia'},
+                title="Los residuos deben seguir una distribución normal"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.info("""
+                **¿Qué buscar?**
+                - ✅ Forma de campana (distribución normal)
+                - ❌ Asimetría fuerte indica problemas
+                """)
+
+        # 3. Q-Q Plot
+        st.markdown("### 📐 Q-Q Plot (Normalidad de Residuos)")
+
+        fig = go.Figure()
+
+        # Calcular quantiles teóricos y empíricos
+        residuals_sorted = np.sort(residuals_test)
+        theoretical_quantiles = stats.norm.ppf(np.linspace(0.01, 0.99, len(residuals_sorted)))
+
+        fig.add_trace(go.Scatter(
+            x=theoretical_quantiles,
+            y=residuals_sorted,
+            mode='markers',
+            name='Quantiles observados',
+            marker=dict(color='blue', size=6, opacity=0.6)
+        ))
+
+        # Línea de referencia
+        fig.add_trace(go.Scatter(
+            x=[theoretical_quantiles.min(), theoretical_quantiles.max()],
+            y=[theoretical_quantiles.min(), theoretical_quantiles.max()],
+            mode='lines',
+            name='Distribución normal perfecta',
+            line=dict(color='red', dash='dash')
+        ))
+
+        fig.update_layout(
+            xaxis_title="Quantiles Teóricos",
+            yaxis_title="Quantiles Observados",
+            height=500,
+            title="Q-Q Plot: Normalidad de Residuos"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.info("""
+            **¿Qué buscar?**
+            - ✅ Puntos alineados con la línea roja = residuos normales
+            - ❌ Desviaciones sistemáticas = residuos no normales
+            - Desviaciones en los extremos son comunes y aceptables
+            """)
+
+    @staticmethod
+    def _plot_logistic_visualizations(results, config):
+        """Visualizaciones para regresión logística"""
+
+        # 1. Curva ROC
+        st.markdown("### 📈 Curva ROC")
+
+        from sklearn.metrics import roc_curve, auc
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Entrenamiento")
+            fpr, tpr, _ = roc_curve(results['y_train'], results['metrics']['probabilities']['train'])
+            roc_auc = auc(fpr, tpr)
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=fpr, y=tpr,
+                mode='lines',
+                name=f'ROC (AUC = {roc_auc:.3f})',
+                line=dict(color='blue', width=2)
+            ))
+            fig.add_trace(go.Scatter(
+                x=[0, 1], y=[0, 1],
+                mode='lines',
+                name='Aleatorio',
+                line=dict(color='red', dash='dash')
+            ))
+            fig.update_layout(
+                xaxis_title="Tasa de Falsos Positivos",
+                yaxis_title="Tasa de Verdaderos Positivos",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.markdown("#### Prueba")
+            fpr, tpr, _ = roc_curve(results['y_test'], results['metrics']['probabilities']['test'])
+            roc_auc = auc(fpr, tpr)
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=fpr, y=tpr,
+                mode='lines',
+                name=f'ROC (AUC = {roc_auc:.3f})',
+                line=dict(color='green', width=2)
+            ))
+            fig.add_trace(go.Scatter(
+                x=[0, 1], y=[0, 1],
+                mode='lines',
+                name='Aleatorio',
+                line=dict(color='red', dash='dash')
+            ))
+            fig.update_layout(
+                xaxis_title="Tasa de Falsos Positivos",
+                yaxis_title="Tasa de Verdaderos Positivos",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # 2. Distribución de probabilidades predichas
+        st.markdown("### 📊 Distribución de Probabilidades Predichas")
+
+        fig = go.Figure()
+
+        # Clase 0
+        probs_class0 = results['metrics']['probabilities']['test'][results['y_test'] == 0]
+        fig.add_trace(go.Histogram(
+            x=probs_class0,
+            name='Clase 0 (real)',
+            opacity=0.7,
+            nbinsx=20
+        ))
+
+        # Clase 1
+        probs_class1 = results['metrics']['probabilities']['test'][results['y_test'] == 1]
+        fig.add_trace(go.Histogram(
+            x=probs_class1,
+            name='Clase 1 (real)',
+            opacity=0.7,
+            nbinsx=20
+        ))
+
+        fig.update_layout(
+            xaxis_title="Probabilidad Predicha",
+            yaxis_title="Frecuencia",
+            barmode='overlay',
+            height=400,
+            title="Separación de clases por probabilidad"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.info("""
+            **¿Qué buscar?**
+            - ✅ Buena separación entre histogramas = modelo discrimina bien
+            - ❌ Mucha superposición = modelo tiene dificultad para separar clases
+            """)
+
+    @staticmethod
+    def _plot_ordinal_visualizations(results, config):
+        """Visualizaciones para regresión ordinal"""
+
+        # 1. Matriz de confusión detallada
+        st.markdown("### 🎯 Matriz de Confusión")
+
+        from sklearn.metrics import confusion_matrix
+
+        cm = confusion_matrix(results['y_test'], results['y_test_pred'])
+
+        # Obtener labels únicos
+        unique_labels = sorted(results['y_test'].unique())
+        label_names = [f"Categoría {int(l)}" for l in unique_labels]
+
+        fig = px.imshow(
+            cm,
+            text_auto=True,
+            labels=dict(x="Predicción", y="Real", color="Cantidad"),
+            x=label_names,
+            y=label_names,
+            color_continuous_scale='Blues'
+        )
+        fig.update_layout(
+            title="Matriz de Confusión - Regresión Ordinal",
+            height=500
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # 2. Distribución de predicciones vs reales
+        st.markdown("### 📊 Distribución de Predicciones")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Valores Reales")
+            real_counts = results['y_test'].value_counts().sort_index()
+            fig = px.bar(
+                x=real_counts.index,
+                y=real_counts.values,
+                labels={'x': 'Categoría', 'y': 'Frecuencia'}
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.markdown("#### Valores Predichos")
+            pred_counts = pd.Series(results['y_test_pred']).value_counts().sort_index()
+            fig = px.bar(
+                x=pred_counts.index,
+                y=pred_counts.values,
+                labels={'x': 'Categoría', 'y': 'Frecuencia'},
+                color_discrete_sequence=['green']
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # 3. Errores de predicción
+        st.markdown("### 📉 Análisis de Errores")
+
+        errors = results['y_test'].values - results['y_test_pred']
+
+        fig = px.histogram(
+            errors,
+            nbins=len(unique_labels) * 2,
+            labels={'value': 'Error (Real - Predicho)', 'count': 'Frecuencia'},
+            title="Distribución de Errores"
+        )
+        fig.add_vline(x=0, line_dash="dash", line_color="red")
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.info("""
+            **¿Qué buscar?**
+            - ✅ Errores centrados en 0 = buenas predicciones
+            - ❌ Sesgo sistemático hacia un lado = modelo subestima o sobreestima
+            """)
+
+    @staticmethod
+    def _show_coefficients(results, config):
+        """Muestra los coeficientes del modelo y su importancia"""
+
+        st.markdown("### 🎯 Coeficientes del Modelo")
+
+        model = results['model']
+        feature_names = results['feature_names']
+        regression_type = config['regression_type']
+
+        if regression_type == 'ols':
+            # Coeficientes de regresión lineal
+            coefficients = model.coef_
+            intercept = model.intercept_
+
+            # Crear DataFrame de coeficientes
+            coef_df = pd.DataFrame({
+                'Variable': feature_names,
+                'Coeficiente': coefficients,
+                'Abs_Coeficiente': np.abs(coefficients)
+            }).sort_values('Abs_Coeficiente', ascending=False)
+
+            # Métricas generales
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Intercepto (β₀)", f"{intercept:.4f}")
+            with col2:
+                st.metric("Variables", len(feature_names))
+            with col3:
+                st.metric("Coef. más alto", f"{coef_df.iloc[0]['Coeficiente']:.4f}")
+
+            # Visualización de coeficientes
+            st.markdown("#### 📊 Importancia de Variables")
+
+            # Top N variables
+            top_n = st.slider("Mostrar top N variables", 5, min(50, len(feature_names)), min(15, len(feature_names)))
+
+            top_coef = coef_df.head(top_n)
+
+            fig = px.bar(
+                top_coef,
+                x='Coeficiente',
+                y='Variable',
+                orientation='h',
+                title=f"Top {top_n} Variables por Importancia (Valor Absoluto)",
+                labels={'Coeficiente': 'Coeficiente', 'Variable': 'Variable'},
+                color='Coeficiente',
+                color_continuous_scale='RdBu_r',
+                color_continuous_midpoint=0
+            )
+            fig.update_layout(height=max(400, top_n * 25))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Interpretación
+            st.markdown("#### 📖 Interpretación de Coeficientes")
+
+            st.info(f"""
+                **Intercepto (β₀) = {intercept:.4f}**: Valor predicho de Y cuando todas las variables X son 0.
+
+                **Coeficientes positivos**: Cuando la variable aumenta, Y tiende a aumentar.
+
+                **Coeficientes negativos**: Cuando la variable aumenta, Y tiende a disminuir.
+
+                **Magnitud**: El valor absoluto indica la fuerza del efecto.
+
+                ⚠️ **Nota**: Los coeficientes están en escala estandarizada, por lo que son comparables entre sí.
+                """)
+
+            # Tabla completa
+            with st.expander("📋 Ver tabla completa de coeficientes", expanded=False):
+                st.dataframe(
+                    coef_df.style.format({
+                        'Coeficiente': '{:.6f}',
+                        'Abs_Coeficiente': '{:.6f}'
+                    }).background_gradient(subset=['Coeficiente'], cmap='RdBu_r',
+                                           vmin=-coef_df['Abs_Coeficiente'].max(),
+                                           vmax=coef_df['Abs_Coeficiente'].max()),
+                    use_container_width=True,
+                    height=400
+                )
+
+            # Análisis adicional
+            st.markdown("#### 🔍 Análisis Adicional")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("##### Variables con Mayor Impacto Positivo")
+                top_positive = coef_df[coef_df['Coeficiente'] > 0].head(5)
+                if not top_positive.empty:
+                    for idx, row in top_positive.iterrows():
+                        st.markdown(f"- **{row['Variable']}**: +{row['Coeficiente']:.4f}")
+                else:
+                    st.info("No hay variables con impacto positivo")
+
+            with col2:
+                st.markdown("##### Variables con Mayor Impacto Negativo")
+                top_negative = coef_df[coef_df['Coeficiente'] < 0].head(5)
+                if not top_negative.empty:
+                    for idx, row in top_negative.iterrows():
+                        st.markdown(f"- **{row['Variable']}**: {row['Coeficiente']:.4f}")
+                else:
+                    st.info("No hay variables con impacto negativo")
+
+        elif regression_type == 'logistic':
+            # Coeficientes de regresión logística
+            coefficients = model.coef_[0]  # Para clasificación binaria
+            intercept = model.intercept_[0]
+
+            # Calcular odds ratios
+            odds_ratios = np.exp(coefficients)
+
+            # Crear DataFrame
+            coef_df = pd.DataFrame({
+                'Variable': feature_names,
+                'Coeficiente': coefficients,
+                'Odds Ratio': odds_ratios,
+                'Abs_Coeficiente': np.abs(coefficients)
+            }).sort_values('Abs_Coeficiente', ascending=False)
+
+            # Métricas generales
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Intercepto (β₀)", f"{intercept:.4f}")
+            with col2:
+                st.metric("Variables", len(feature_names))
+            with col3:
+                st.metric("Mayor Odds Ratio", f"{coef_df.iloc[0]['Odds Ratio']:.4f}")
+
+            # Visualización
+            st.markdown("#### 📊 Importancia de Variables")
+
+            top_n = st.slider("Mostrar top N variables", 5, min(50, len(feature_names)), min(15, len(feature_names)))
+            top_coef = coef_df.head(top_n)
+
+            # Gráfico de coeficientes
+            fig = px.bar(
+                top_coef,
+                x='Coeficiente',
+                y='Variable',
+                orientation='h',
+                title=f"Top {top_n} Variables por Importancia",
+                color='Coeficiente',
+                color_continuous_scale='RdBu_r',
+                color_continuous_midpoint=0
+            )
+            fig.update_layout(height=max(400, top_n * 25))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Gráfico de Odds Ratios
+            st.markdown("#### 📈 Odds Ratios")
+
+            fig = px.bar(
+                top_coef,
+                x='Odds Ratio',
+                y='Variable',
+                orientation='h',
+                title=f"Odds Ratios - Top {top_n} Variables",
+                color='Odds Ratio',
+                color_continuous_scale='Viridis'
+            )
+            fig.add_vline(x=1, line_dash="dash", line_color="red",
+                          annotation_text="OR = 1 (sin efecto)")
+            fig.update_layout(height=max(400, top_n * 25))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Interpretación
+            st.markdown("#### 📖 Interpretación")
+
+            st.info("""
+                **Coeficientes (β)**:
+                - Coeficiente positivo: La variable aumenta la probabilidad de Y=1
+                - Coeficiente negativo: La variable disminuye la probabilidad de Y=1
+
+                **Odds Ratios (OR)**:
+                - OR > 1: La variable aumenta las probabilidades de Y=1
+                - OR < 1: La variable disminuye las probabilidades de Y=1
+                - OR = 1: La variable no tiene efecto
+
+                **Ejemplo**: Si OR = 2.5, significa que por cada unidad de aumento en X, 
+                las probabilidades de Y=1 se multiplican por 2.5 (aumentan 150%).
+                """)
+
+            # Tabla completa
+            with st.expander("📋 Ver tabla completa de coeficientes", expanded=False):
+                st.dataframe(
+                    coef_df.style.format({
+                        'Coeficiente': '{:.6f}',
+                        'Odds Ratio': '{:.4f}',
+                        'Abs_Coeficiente': '{:.6f}'
+                    }),
+                    use_container_width=True,
+                    height=400
+                )
+
+        elif regression_type == 'ordinal':
+            # Coeficientes de regresión ordinal
+            try:
+                coefficients = model.coef_
+
+                # Crear DataFrame
+                coef_df = pd.DataFrame({
+                    'Variable': feature_names,
+                    'Coeficiente': coefficients,
+                    'Abs_Coeficiente': np.abs(coefficients)
+                }).sort_values('Abs_Coeficiente', ascending=False)
+
+                # Métricas generales
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Variables", len(feature_names))
+                with col2:
+                    st.metric("Coef. más alto", f"{coef_df.iloc[0]['Coeficiente']:.4f}")
+
+                # Visualización
+                st.markdown("#### 📊 Importancia de Variables")
+
+                top_n = st.slider("Mostrar top N variables", 5, min(50, len(feature_names)),
+                                  min(15, len(feature_names)))
+                top_coef = coef_df.head(top_n)
+
+                fig = px.bar(
+                    top_coef,
+                    x='Coeficiente',
+                    y='Variable',
+                    orientation='h',
+                    title=f"Top {top_n} Variables por Importancia",
+                    color='Coeficiente',
+                    color_continuous_scale='RdBu_r',
+                    color_continuous_midpoint=0
+                )
+                fig.update_layout(height=max(400, top_n * 25))
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Interpretación
+                st.markdown("#### 📖 Interpretación")
+
+                st.info("""
+                    **Coeficientes positivos**: La variable aumenta la probabilidad de categorías más altas.
+
+                    **Coeficientes negativos**: La variable aumenta la probabilidad de categorías más bajas.
+
+                    **Magnitud**: El valor absoluto indica la fuerza del efecto.
+                    """)
+
+                # Tabla completa
+                with st.expander("📋 Ver tabla completa de coeficientes", expanded=False):
+                    st.dataframe(
+                        coef_df.style.format({
+                            'Coeficiente': '{:.6f}',
+                            'Abs_Coeficiente': '{:.6f}'
+                        }),
+                        use_container_width=True,
+                        height=400
+                    )
+
+            except Exception as e:
+                st.warning(f"No se pueden mostrar coeficientes para este modelo ordinal: {str(e)}")
+
+    @staticmethod
+    def _show_export_options(results, config):
+        """Opciones para exportar resultados"""
+
+        st.markdown("### 📥 Exportar Resultados")
+
+        regression_type = config['regression_type']
+
+        # 1. Exportar predicciones
+        st.markdown("#### 🔢 Predicciones")
+
+        # Crear DataFrame de predicciones
+        predictions_df = pd.DataFrame({
+            'Índice': results['y_test'].index,
+            'Valor_Real': results['y_test'].values,
+            'Valor_Predicho': results['y_test_pred']
+        })
+
+        if regression_type == 'ols':
+            predictions_df['Error'] = predictions_df['Valor_Real'] - predictions_df['Valor_Predicho']
+            predictions_df['Error_Absoluto'] = np.abs(predictions_df['Error'])
+
+        st.dataframe(predictions_df.head(10), use_container_width=True)
+
+        # Botón de descarga
+        csv_predictions = predictions_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Descargar Predicciones (CSV)",
+            data=csv_predictions,
+            file_name=f"predicciones_{regression_type}_{config['y_name']}.csv",
+            mime="text/csv"
+        )
+
+        # 2. Exportar coeficientes
+        st.markdown("#### 📊 Coeficientes")
+
+        model = results['model']
+        feature_names = results['feature_names']
+
+        if regression_type == 'ols':
+            coef_df = pd.DataFrame({
+                'Variable': ['Intercepto'] + feature_names,
+                'Coeficiente': [model.intercept_] + list(model.coef_)
+            })
+
+        elif regression_type == 'logistic':
+            odds_ratios = np.exp(model.coef_[0])
+            coef_df = pd.DataFrame({
+                'Variable': ['Intercepto'] + feature_names,
+                'Coeficiente': [model.intercept_[0]] + list(model.coef_[0]),
+                'Odds_Ratio': [np.exp(model.intercept_[0])] + list(odds_ratios)
+            })
+
+        elif regression_type == 'ordinal':
+            try:
+                coef_df = pd.DataFrame({
+                    'Variable': feature_names,
+                    'Coeficiente': model.coef_
+                })
+            except:
+                coef_df = pd.DataFrame({
+                    'Variable': feature_names,
+                    'Coeficiente': [0] * len(feature_names)
+                })
+
+        st.dataframe(coef_df, use_container_width=True)
+
+        csv_coef = coef_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Descargar Coeficientes (CSV)",
+            data=csv_coef,
+            file_name=f"coeficientes_{regression_type}_{config['y_name']}.csv",
+            mime="text/csv"
+        )
+
+        # 3. Exportar métricas
+        st.markdown("#### 📈 Métricas de Desempeño")
+
+        metrics = results['metrics']
+
+        if regression_type == 'ols':
+            metrics_df = pd.DataFrame({
+                'Métrica': ['R²', 'R² Ajustado', 'RMSE', 'MAE'],
+                'Entrenamiento': [
+                    metrics['train']['r2'],
+                    metrics['train']['r2_adjusted'],
+                    metrics['train']['rmse'],
+                    metrics['train']['mae']
+                ],
+                'Prueba': [
+                    metrics['test']['r2'],
+                    metrics['test']['r2_adjusted'],
+                    metrics['test']['rmse'],
+                    metrics['test']['mae']
+                ]
+            })
+
+        elif regression_type == 'logistic':
+            metrics_df = pd.DataFrame({
+                'Métrica': ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'ROC-AUC'],
+                'Entrenamiento': [
+                    metrics['train']['accuracy'],
+                    metrics['train']['precision'],
+                    metrics['train']['recall'],
+                    metrics['train']['f1'],
+                    metrics['train']['roc_auc']
+                ],
+                'Prueba': [
+                    metrics['test']['accuracy'],
+                    metrics['test']['precision'],
+                    metrics['test']['recall'],
+                    metrics['test']['f1'],
+                    metrics['test']['roc_auc']
+                ]
+            })
+
+        elif regression_type == 'ordinal':
+            metrics_df = pd.DataFrame({
+                'Métrica': ['Accuracy', 'MAE', 'MAE Baseline'],
+                'Entrenamiento': [
+                    metrics['train']['accuracy'],
+                    metrics['train']['mae'],
+                    metrics['train']['mae_baseline']
+                ],
+                'Prueba': [
+                    metrics['test']['accuracy'],
+                    metrics['test']['mae'],
+                    metrics['test']['mae_baseline']
+                ]
+            })
+
+        st.dataframe(metrics_df, use_container_width=True)
+
+        csv_metrics = metrics_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Descargar Métricas (CSV)",
+            data=csv_metrics,
+            file_name=f"metricas_{regression_type}_{config['y_name']}.csv",
+            mime="text/csv"
+        )
+
+        # 4. Reporte completo
+        st.markdown("#### 📄 Reporte Completo")
+
+        report = f"""
+    # Reporte de Regresión - {RegressionSystem.REGRESSION_TYPES[regression_type]['name']}
+
+    ## Configuración del Modelo
+    - **Variable Dependiente (Y):** {config['y_name']}
+    - **Variables Independientes (X):** {len(config['x_names'])}
+    - **Tipo de Regresión:** {regression_type.upper()}
+    - **Tamaño de Prueba:** {len(results['y_test'])} observaciones
+    - **Tamaño de Entrenamiento:** {len(results['y_train'])} observaciones
+
+    ## Métricas de Desempeño
+
+    ### Conjunto de Prueba
+    """
+
+        if regression_type == 'ols':
+            report += f"""
+    - **R² Score:** {metrics['test']['r2']:.4f}
+    - **R² Ajustado:** {metrics['test']['r2_adjusted']:.4f}
+    - **RMSE:** {metrics['test']['rmse']:.4f}
+    - **MAE:** {metrics['test']['mae']:.4f}
+    """
+        elif regression_type == 'logistic':
+            report += f"""
+    - **Accuracy:** {metrics['test']['accuracy']:.4f}
+    - **Precision:** {metrics['test']['precision']:.4f}
+    - **Recall:** {metrics['test']['recall']:.4f}
+    - **F1-Score:** {metrics['test']['f1']:.4f}
+    - **ROC-AUC:** {metrics['test']['roc_auc']:.4f}
+    """
+        elif regression_type == 'ordinal':
+            report += f"""
+    - **Accuracy:** {metrics['test']['accuracy']:.4f}
+    - **MAE:** {metrics['test']['mae']:.4f}
+    - **MAE Baseline:** {metrics['test']['mae_baseline']:.4f}
+    """
+
+        report += f"""
+
+    ## Variables Más Importantes
+
+    """
+
+        # Agregar top 10 coeficientes
+        coef_df_sorted = coef_df.sort_values('Coeficiente', key=abs, ascending=False).head(10)
+        for idx, row in coef_df_sorted.iterrows():
+            if 'Variable' in row:
+                report += f"- **{row['Variable']}:** {row['Coeficiente']:.6f}\n"
+
+        report += f"""
+
+    ## Variables Seleccionadas
+
+    """
+        for var in config['x_names']:
+            report += f"- {var}\n"
+
+        st.download_button(
+            label="📥 Descargar Reporte Completo (TXT)",
+            data=report,
+            file_name=f"reporte_{regression_type}_{config['y_name']}.txt",
+            mime="text/plain"
+        )
+
+        # 5. Guardar modelo (opcional)
+        st.markdown("#### 💾 Guardar Modelo")
+
+        st.info("""
+            ℹ️ Para guardar el modelo entrenado y reutilizarlo más tarde, 
+            puedes usar la librería `pickle` o `joblib` de Python.
+
+            Esta funcionalidad se puede implementar si necesitas hacer predicciones 
+            sobre nuevos datos en el futuro.
+            """)
+
+        if st.button("🔧 Ver código para guardar modelo"):
+            st.code("""
+    import pickle
+
+    # Guardar el modelo
+    with open('modelo_regresion.pkl', 'wb') as f:
+        pickle.dump(model, f)
+
+    # Guardar el scaler
+    with open('scaler.pkl', 'wb') as f:
+        pickle.dump(scaler, f)
+
+    # Cargar modelo más tarde
+    with open('modelo_regresion.pkl', 'rb') as f:
+        modelo_cargado = pickle.load(f)
+
+    # Hacer predicciones
+    nuevas_predicciones = modelo_cargado.predict(nuevos_datos)
+                """, language='python')
 
 class StatHypothesisTest:
     @staticmethod
@@ -913,66 +2900,167 @@ class DataTreatments:
     def corr_data_handler(df):
         new_df = df.copy()
 
-        # Definir umbrales para variables con muchos valores únicos
+        # Configuración centralizada
+        EXCLUDE_COLS = ['Transecto', 'Ponderador']
         HIGH_CARDINALITY_THRESHOLD = 20
+        INVALID_VALUES = [9999999, 999999]
 
-        # 1. Identificar todas las columnas a procesar
-        columns_to_process = []
+        BINNING_RULES = {
+            'luz': {'bins': [0, 200, 500, 1000, np.inf], 'labels': ['Bajo', 'Medio', 'Alto', 'Muy alto']},
+            'agua': {'bins': [0, 150, 300, 600, np.inf], 'labels': ['Bajo', 'Medio', 'Alto', 'Muy alto']},
+            'gas': {'bins': [0, 200, 400, 700, np.inf], 'labels': ['Bajo', 'Medio', 'Alto', 'Muy alto']}
+        }
+
         columns_to_drop = []
 
         for col in new_df.columns:
-            # Excluir columnas que no debemos tocar
-            if col in ['Transecto', 'Ponderador']:
+            if col in EXCLUDE_COLS:
                 continue
 
-            # Procesar todas las demás columnas
-            columns_to_process.append(col)
+            # Limpiar valores inválidos
+            new_df[col] = new_df[col].replace(INVALID_VALUES, np.nan)
 
-        # 2. Procesar cada columna
-        for col in columns_to_process:
             unique_values = new_df[col].dropna().unique()
             n_unique = len(unique_values)
 
-            # Si la columna tiene muchos valores únicos, crear rangos
+            # Aplicar binning si es necesario
             if n_unique > HIGH_CARDINALITY_THRESHOLD:
-                # Variables monetarias (Luz, Agua, Gas)
-                if 'Luz' in col and 'mensualmente' in col:
-                    bins = [0, 200, 500, 1000, float('inf')]
-                    labels = ['Bajo (0-200)', 'Medio (201-500)', 'Alto (501-1000)', 'Muy alto (1000+)']
-                    # Limpiar valores inválidos
-                    new_df[col] = new_df[col].apply(lambda x: np.nan if x >= 9999999 else x)
-                    new_df[col] = pd.cut(new_df[col], bins=bins, labels=labels, include_lowest=True)
-                    unique_values = labels
+                rule_applied = False
 
-                elif 'Agua' in col and 'mensualmente' in col:
-                    bins = [0, 150, 300, 600, float('inf')]
-                    labels = ['Bajo (0-150)', 'Medio (151-300)', 'Alto (301-600)', 'Muy alto (600+)']
-                    new_df[col] = new_df[col].apply(lambda x: np.nan if x >= 9999999 else x)
-                    new_df[col] = pd.cut(new_df[col], bins=bins, labels=labels, include_lowest=True)
-                    unique_values = labels
+                for service, rule in BINNING_RULES.items():
+                    if service in col.lower() and 'mensual' in col.lower():
+                        new_df[col] = pd.cut(new_df[col], bins=rule['bins'],
+                                             labels=rule['labels'], include_lowest=True)
+                        unique_values = rule['labels']
+                        rule_applied = True
+                        break
 
-                elif 'Gas' in col and 'mensualmente' in col:
-                    bins = [0, 200, 400, 700, float('inf')]
-                    labels = ['Bajo (0-200)', 'Medio (201-400)', 'Alto (401-700)', 'Muy alto (700+)']
-                    new_df[col] = new_df[col].apply(lambda x: np.nan if pd.isna(x) or x >= 9999999 else x)
-                    new_df[col] = pd.cut(new_df[col], bins=bins, labels=labels, include_lowest=True)
-                    unique_values = labels
+                if not rule_applied:
+                    # Binning genérico para otras variables
+                    try:
+                        new_df[col] = pd.qcut(new_df[col], q=5, labels=False, duplicates='drop')
+                        unique_values = new_df[col].dropna().unique()
+                    except:
+                        pass
 
-            # 3. Crear columnas dummy para cada valor único
-            for value in unique_values:
-                # Nombre de la nueva columna
+            # One-hot encoding (drop first para evitar multicolinealidad)
+            for idx, value in enumerate(unique_values):
                 new_col_name = f"{col}_{value}"
-
-                # Crear columna binaria
                 new_df[new_col_name] = (new_df[col] == value).astype(int)
 
-            # Marcar columna original para eliminar
+                new_col_name = f"{col}_{value}"
+                new_df[new_col_name] = (new_df[col] == value).astype(int)
+
             columns_to_drop.append(col)
 
-        # 4. Eliminar columnas originales
+        # Limpieza final
         new_df = new_df.drop(columns=columns_to_drop)
 
-        return new_df
+        # Validación
+        new_df = new_df.loc[:, new_df.nunique() > 1]  # Eliminar columnas sin varianza
+
+        if new_df.shape[1] < 2:
+            raise ValueError("Datos insuficientes para análisis de correlación")
+
+        # ⭐ ESTANDARIZACIÓN ⭐
+        scaler = StandardScaler()
+
+        # Manejar NaN: StandardScaler no los acepta
+        # Opción 1: Imputar con la mediana
+        new_df_filled = new_df.fillna(new_df.median())
+
+        # Aplicar estandarización
+        scaled_data = scaler.fit_transform(new_df_filled)
+
+        # Convertir de vuelta a DataFrame
+        new_df_scaled = pd.DataFrame(
+            scaled_data,
+            columns=new_df.columns,
+            index=new_df.index
+        )
+
+        return new_df_scaled
+
+    @staticmethod
+    def regression_data_handler(df):
+        """
+        Prepara datos específicamente para regresión.
+        Similar a corr_data_handler pero con drop_first=True para evitar multicolinealidad.
+        """
+        new_df = df.copy()
+
+        # Configuración centralizada
+        EXCLUDE_COLS = ['Transecto', 'Ponderador']
+        HIGH_CARDINALITY_THRESHOLD = 20
+        INVALID_VALUES = [9999999, 999999]
+
+        BINNING_RULES = {
+            'luz': {'bins': [0, 200, 500, 1000, np.inf], 'labels': ['Bajo', 'Medio', 'Alto', 'Muy alto']},
+            'agua': {'bins': [0, 150, 300, 600, np.inf], 'labels': ['Bajo', 'Medio', 'Alto', 'Muy alto']},
+            'gas': {'bins': [0, 200, 400, 700, np.inf], 'labels': ['Bajo', 'Medio', 'Alto', 'Muy alto']}
+        }
+
+        columns_to_drop = []
+
+        # Guardar mapeo de categorías para cada columna (útil para interpretación)
+        category_mappings = {}
+
+        for col in new_df.columns:
+            if col in EXCLUDE_COLS:
+                continue
+
+            # Limpiar valores inválidos
+            new_df[col] = new_df[col].replace(INVALID_VALUES, np.nan)
+
+            unique_values = new_df[col].dropna().unique()
+            n_unique = len(unique_values)
+
+            # Aplicar binning si es necesario
+            if n_unique > HIGH_CARDINALITY_THRESHOLD:
+                rule_applied = False
+
+                for service, rule in BINNING_RULES.items():
+                    if service in col.lower() and 'mensual' in col.lower():
+                        new_df[col] = pd.cut(new_df[col], bins=rule['bins'],
+                                             labels=rule['labels'], include_lowest=True)
+                        unique_values = rule['labels']
+                        rule_applied = True
+                        break
+
+                if not rule_applied:
+                    # Binning genérico para otras variables
+                    try:
+                        new_df[col] = pd.qcut(new_df[col], q=5, labels=False, duplicates='drop')
+                        unique_values = new_df[col].dropna().unique()
+                    except:
+                        pass
+
+            # Guardar mapeo de categorías
+            category_mappings[col] = list(unique_values)
+
+            # ⭐ ONE-HOT ENCODING con drop_first=True para evitar multicolinealidad
+            for idx, value in enumerate(unique_values):
+                if idx == 0:  # Saltar primera categoría (referencia)
+                    continue
+
+                new_col_name = f"{col}_{value}"
+                new_df[new_col_name] = (new_df[col] == value).astype(int)
+
+            columns_to_drop.append(col)
+
+        # Limpieza final
+        new_df = new_df.drop(columns=columns_to_drop)
+
+        # Validación
+        new_df = new_df.loc[:, new_df.nunique() > 1]  # Eliminar columnas sin varianza
+
+        if new_df.shape[1] < 2:
+            raise ValueError("Datos insuficientes para análisis de regresión")
+
+        # ⭐ NO ESTANDARIZAR AQUÍ - Lo haremos después de separar X e Y
+        # Porque Y no debe estandarizarse en todos los casos
+
+        return new_df, category_mappings
 
     @staticmethod
     def except_categories():
