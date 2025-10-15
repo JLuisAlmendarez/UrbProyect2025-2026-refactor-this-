@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 # -----------------------
-st.title("Reporte Q")
+st.title("Reporte 📖")
 df = pd.read_excel("data/table/BasedeDatosTransectosJoseLuis.xlsx")
 
 
