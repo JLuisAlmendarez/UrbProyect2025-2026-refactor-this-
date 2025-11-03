@@ -6,6 +6,7 @@ import streamlit as st
 import pandas as pd
 from script.lib import CorrSystem, DataTreatments, StatHypothesisTest, RegressionSystem, LogisticRegression, LogisticAT
 
+
 # -----------------------
 st.set_page_config(
     page_title="Mi Reporte Q",
@@ -204,9 +205,9 @@ if st.button("Ejecutar Comparaciones"):
             results[key] = (d1, d2, transform_type, test_results)
 
 st.markdown("---")
-st.header(f"**Linear Regression Frame**")
+st.header(f"**Regression Analysis Frame**")
 df_regression = df.copy()
-df_regression = df_regression.drop(columns=["Ageb Manzana", "Ponderador"])
+df_regression = df_regression.drop(columns=["Ageb Manzana", "Ponderador", "Transecto"])
 
 st.markdown("""
     La regresión permite modelar la relación entre una variable dependiente (Y) 

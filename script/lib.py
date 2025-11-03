@@ -27,6 +27,8 @@ from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import plotly.graph_objects as go
 import scipy.stats as stats
 from mord import LogisticAT
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+
 
 class CorrSystem:
     @staticmethod
