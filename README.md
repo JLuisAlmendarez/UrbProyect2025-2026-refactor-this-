@@ -1,6 +1,6 @@
 # Entregable — Análisis de Datos DHDU
 
-Este paquete contiene el reporte final, el código utilizado para realizar los análisis, las gráficas generadas, los resultados de los screenings y documentación complementaria.
+Este paquete contiene el reporte final, el código utilizado para realizar los análisis, las gráficas generadas, los resultados de los screenings y documentación complementaria.Producidas durante la becaria en el departamento de hábitat y desarrollo urbano.
 
 ## Estructura del entregable
 
